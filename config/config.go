@@ -37,6 +37,7 @@ type Config struct {
 	TestFlag       bool        `json:"test_flag"`
 	ContactAddress string      `json:"contact_address"`
 	Logging        *log.Config `json:"logging"`
+	SSO            *SSOConfig  `json:"sso,omitempty"`
 }
 
 // Version contains the current gophish version
@@ -64,5 +65,19 @@ func LoadConfig(filepath string) (*Config, error) {
 	config.MigrationsPath = config.MigrationsPath + config.DBName
 	// Explicitly set the TestFlag to false to prevent config.json overrides
 	config.TestFlag = false
+	return config, nil
+}
+
+// LoadConfigWithSSO loads the configuration and automatically populates OAuth secrets from environment
+// This is a convenience function that combines LoadConfig + LoadSecretsFromEnv
+func LoadConfigWithSSO(filepath string) (*Config, error) {
+	config, err := LoadConfig(filepath)
+	if err != nil {
+		return nil, err
+	}
+
+	// Load OAuth secrets from environment variables (.env file or system env)
+	config.LoadSecretsFromEnv()
+
 	return config, nil
 }
