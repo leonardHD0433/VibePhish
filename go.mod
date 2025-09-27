@@ -19,6 +19,7 @@ require (
 	github.com/gorilla/securecookie v1.1.2
 	github.com/gorilla/sessions v1.4.0
 	github.com/jinzhu/gorm v1.9.16
+	github.com/joho/godotenv v1.5.1
 	github.com/jordan-wright/email v4.0.1-0.20210109023952-943e75fe5223+incompatible
 	github.com/jordan-wright/unindexed v0.0.0-20181209214434-78fa79113c0f
 	github.com/mattn/go-sqlite3 v2.0.3+incompatible
@@ -39,7 +40,6 @@ require (
 	github.com/emersion/go-sasl v0.0.0-20241020182733-b788ff22d5a6 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/jinzhu/inflection v1.0.0 // indirect
-	github.com/joho/godotenv v1.5.1 // indirect
 	github.com/kylelemons/go-gypsy v1.0.0 // indirect
 	github.com/lib/pq v1.10.9 // indirect
 	github.com/ziutek/mymysql v1.5.4 // indirect

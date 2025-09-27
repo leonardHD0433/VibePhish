@@ -45,14 +45,247 @@
             <img id="logo" src="/images/logo_purple.png" />
             <h2 class="form-signin-heading">Please sign in</h2>
             {{template "flashes" .Flashes}}
-            <input type="text" name="username" class="form-control top-input" placeholder="Username" required autofocus>
-            <input type="password" name="password" class="form-control bottom-input" placeholder="Password" autocomplete="off" required>
-            <input type="hidden" name="csrf_token" value="{{.Token}}" />
-            <button class="btn btn-lg btn-primary btn-block" type="submit">Sign in</button>
+
+            <!-- Primary SSO Authentication -->
+            {{if and .SSOEnabled .MicrosoftEnabled}}
+            <div class="sso-login-section primary-auth">
+                <div class="auth-instruction">
+                    <h3 class="auth-heading">Welcome to FYPhish</h3>
+                    <p class="auth-subtitle">Please sign in using your organizational account</p>
+                </div>
+
+                <a href="/auth/microsoft" class="btn btn-lg btn-block sso-button microsoft-btn primary-sso-btn"
+                   role="button" aria-label="Sign in with Microsoft Azure Active Directory">
+                    <i class="fa fa-windows" aria-hidden="true"></i>
+                    <span class="sso-text">Sign in with Microsoft</span>
+                </a>
+
+                <!-- SSO Status Indicator -->
+                <div class="sso-status" id="sso-status" aria-live="polite">
+                    <div class="status-indicator connecting" id="status-indicator" style="display: none;">
+                        <i class="fa fa-spinner fa-spin" aria-hidden="true"></i>
+                        <span>Connecting to Microsoft...</span>
+                    </div>
+                    <div class="status-indicator error" id="sso-error" style="display: none;">
+                        <i class="fa fa-exclamation-triangle" aria-hidden="true"></i>
+                        <span id="error-message">SSO temporarily unavailable</span>
+                    </div>
+                </div>
+
+                <!-- Emergency Access Toggle (only show if emergency access enabled) -->
+                {{if .EmergencyAccess}}
+                <div class="emergency-access-section" id="emergency-section">
+                    <button type="button" class="btn-link emergency-toggle" id="emergency-toggle"
+                            aria-expanded="false" aria-controls="local-login-section">
+                        <i class="fa fa-key" aria-hidden="true"></i>
+                        <span>Need emergency access?</span>
+                    </button>
+                </div>
+                {{end}}
+            </div>
+            {{end}}
+
+            <!-- Local Login Section (Hidden by Default if SSO enabled, or shown if SSO disabled) -->
+            {{if .AllowLocalLogin}}
+            <div class="local-login-section" id="local-login-section"
+                 {{if and .SSOEnabled .HideLocalLogin}}style="display: none;" aria-hidden="true"{{else}}style="display: block;" aria-hidden="false"{{end}}
+                 role="region" aria-labelledby="emergency-login-heading">
+                <div class="emergency-divider">
+                    <span class="divider-text">Emergency Access</span>
+                </div>
+
+                <div class="emergency-warning">
+                    <i class="fa fa-warning" aria-hidden="true"></i>
+                    <strong>Administrator Emergency Access</strong>
+                    <p>Only use this option if SSO is unavailable or you need emergency administrative access.</p>
+                </div>
+
+                <div class="local-form-fields">
+                    <label for="username" class="sr-only">Username</label>
+                    <input type="text" name="username" id="username" class="form-control top-input"
+                           placeholder="Administrator Username" autocomplete="username">
+
+                    <label for="password" class="sr-only">Password</label>
+                    <input type="password" name="password" id="password" class="form-control bottom-input"
+                           placeholder="Password" autocomplete="current-password">
+
+                    <input type="hidden" name="csrf_token" value="{{.Token}}" />
+                    <input type="hidden" name="emergency_login" value="true" />
+
+                    <button class="btn btn-lg btn-secondary btn-block emergency-login-btn" type="submit">
+                        <i class="fa fa-sign-in" aria-hidden="true"></i>
+                        Emergency Sign In
+                    </button>
+
+                    {{if and .SSOEnabled .MicrosoftEnabled}}
+                    <button type="button" class="btn btn-link btn-sm cancel-emergency" id="cancel-emergency">
+                        Cancel - Return to SSO
+                    </button>
+                    {{end}}
+                </div>
+            </div>
+            {{end}}
+
+            <!-- Fallback for when SSO is disabled - show traditional login -->
+            {{if not .SSOEnabled}}
+            <div class="traditional-login-section">
+                <div class="login-fields">
+                    <label for="username" class="sr-only">Username</label>
+                    <input type="text" name="username" id="username" class="form-control top-input"
+                           placeholder="Username" required autofocus autocomplete="username">
+
+                    <label for="password" class="sr-only">Password</label>
+                    <input type="password" name="password" id="password" class="form-control bottom-input"
+                           placeholder="Password" required autocomplete="current-password">
+
+                    <input type="hidden" name="csrf_token" value="{{.Token}}" />
+
+                    <button class="btn btn-lg btn-primary btn-block" type="submit">
+                        <i class="fa fa-sign-in" aria-hidden="true"></i>
+                        Sign in
+                    </button>
+                </div>
+            </div>
+            {{end}}
         </form>
     </div>
     <!-- Placed at the end of the document so the pages load faster -->
     <script src="/js/dist/vendor.min.js"></script>
+    <script src="/js/dist/app/login.min.js"></script>
+
+    <!-- SSO-First Login Enhancement Script -->
+    <script>
+    document.addEventListener('DOMContentLoaded', function() {
+        // Emergency access toggle functionality
+        const emergencyToggle = document.getElementById('emergency-toggle');
+        const localLoginSection = document.getElementById('local-login-section');
+        const cancelEmergency = document.getElementById('cancel-emergency');
+        const usernameField = document.getElementById('username');
+
+        // URL parameter check for emergency access
+        const urlParams = new URLSearchParams(window.location.search);
+        const showEmergency = urlParams.get('emergency') === 'true';
+
+        if (showEmergency) {
+            showEmergencyAccess();
+        }
+
+        // Toggle emergency access
+        if (emergencyToggle) {
+            emergencyToggle.addEventListener('click', function() {
+                showEmergencyAccess();
+            });
+        }
+
+        // Cancel emergency access
+        if (cancelEmergency) {
+            cancelEmergency.addEventListener('click', function() {
+                hideEmergencyAccess();
+            });
+        }
+
+        function showEmergencyAccess() {
+            localLoginSection.style.display = 'block';
+            localLoginSection.setAttribute('aria-hidden', 'false');
+            emergencyToggle.setAttribute('aria-expanded', 'true');
+            emergencyToggle.style.display = 'none';
+
+            // Focus on username field for accessibility
+            setTimeout(() => {
+                if (usernameField) {
+                    usernameField.focus();
+                }
+            }, 100);
+
+            // Update URL to reflect emergency mode
+            const newUrl = new URL(window.location);
+            newUrl.searchParams.set('emergency', 'true');
+            window.history.replaceState({}, '', newUrl);
+        }
+
+        function hideEmergencyAccess() {
+            localLoginSection.style.display = 'none';
+            localLoginSection.setAttribute('aria-hidden', 'true');
+            emergencyToggle.setAttribute('aria-expanded', 'false');
+            emergencyToggle.style.display = 'block';
+
+            // Remove emergency parameter from URL
+            const newUrl = new URL(window.location);
+            newUrl.searchParams.delete('emergency');
+            window.history.replaceState({}, '', newUrl);
+        }
+
+        // SSO error handling and fallback
+        const ssoButton = document.querySelector('.primary-sso-btn');
+        const statusIndicator = document.getElementById('status-indicator');
+        const ssoError = document.getElementById('sso-error');
+        const errorMessage = document.getElementById('error-message');
+
+        if (ssoButton) {
+            ssoButton.addEventListener('click', function(e) {
+                // Show connecting status
+                if (statusIndicator) {
+                    statusIndicator.style.display = 'flex';
+                }
+            });
+
+            // Detect if returning from failed SSO attempt
+            const wasSSO = sessionStorage.getItem('sso_attempt');
+            if (wasSSO && window.location.search.includes('error')) {
+                showSSOError('Authentication failed. Please try again or use emergency access.');
+                sessionStorage.removeItem('sso_attempt');
+            }
+        }
+
+        // Mark SSO attempt for error detection
+        function markSSOAttempt() {
+            sessionStorage.setItem('sso_attempt', 'true');
+        }
+
+        // Show SSO error with fallback option
+        function showSSOError(message) {
+            if (ssoError && errorMessage) {
+                errorMessage.textContent = message;
+                ssoError.style.display = 'flex';
+
+                // Auto-show emergency access after SSO failure
+                setTimeout(() => {
+                    if (emergencyToggle) {
+                        emergencyToggle.style.display = 'block';
+                        emergencyToggle.innerHTML = '<i class="fa fa-key" aria-hidden="true"></i><span>SSO unavailable - Use emergency access</span>';
+                        emergencyToggle.classList.add('emergency-fallback');
+                    }
+                }, 2000);
+            }
+        }
+
+        // Keyboard navigation enhancement
+        document.addEventListener('keydown', function(e) {
+            // Alt+E for emergency access (power users)
+            if (e.altKey && e.key === 'e') {
+                e.preventDefault();
+                if (localLoginSection.style.display === 'none') {
+                    showEmergencyAccess();
+                } else {
+                    hideEmergencyAccess();
+                }
+            }
+        });
+
+        // Mobile responsive enhancements
+        function handleMobileView() {
+            if (window.innerWidth < 768) {
+                const authInstruction = document.querySelector('.auth-instruction');
+                if (authInstruction) {
+                    authInstruction.classList.add('mobile-compact');
+                }
+            }
+        }
+
+        handleMobileView();
+        window.addEventListener('resize', handleMobileView);
+    });
+    </script>
 </body>
 
 </html>

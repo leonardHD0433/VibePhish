@@ -71,18 +71,47 @@ func GetRoleBySlug(slug string) (Role, error) {
 	return role, err
 }
 
+// GetRoleByID returns a role by its ID.
+func GetRoleByID(id int64) (Role, error) {
+	role := Role{}
+	err := db.Where("id=?", id).First(&role).Error
+	return role, err
+}
+
 // HasPermission checks to see if the user has a role with the requested
 // permission.
 func (u *User) HasPermission(slug string) (bool, error) {
-	perm := []Permission{}
-	err := db.Model(Role{ID: u.RoleID}).Where("slug=?", slug).Association("Permissions").Find(&perm).Error
-	if err != nil {
-		return false, err
-	}
-	// Gorm doesn't return an ErrRecordNotFound whe scanning into a slice, so
-	// we need to check the length (ref jinzhu/gorm#228)
-	if len(perm) == 0 {
+	// Validate user has a role
+	if u.RoleID == 0 {
 		return false, nil
 	}
-	return true, nil
+
+	// Use the preloaded Role if available, otherwise load it
+	var role Role
+	if u.Role.ID != 0 {
+		// Use preloaded role (from GetUser with Preload("Role"))
+		role = u.Role
+	} else {
+		// Fallback: load role explicitly if not preloaded
+		err := db.Where("id = ?", u.RoleID).First(&role).Error
+		if err != nil {
+			return false, err
+		}
+	}
+
+	perm := []Permission{}
+	association := db.Model(&role).Association("Permissions")
+	if association.Error != nil {
+		return false, association.Error
+	}
+	association.Find(&perm)
+
+	// Check if the specific permission exists
+	for _, p := range perm {
+		if p.Slug == slug {
+			return true, nil
+		}
+	}
+
+	return false, nil
 }

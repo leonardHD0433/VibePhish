@@ -67,13 +67,16 @@ func (p *MicrosoftProvider) SetRedirectURL(redirectURL string) {
 }
 
 func (p *MicrosoftProvider) GetAuthURL(state string, opts ...oauth2.AuthCodeOption) string {
-	return p.config.AuthCodeURL(state, opts...)
+	// Add prompt=select_account to always show account selection
+	allOpts := append(opts, oauth2.SetAuthURLParam("prompt", "select_account"))
+	return p.config.AuthCodeURL(state, allOpts...)
 }
 
 func (p *MicrosoftProvider) GetAuthURLWithPKCE(state string, pkce *PKCEChallenge) string {
 	opts := []oauth2.AuthCodeOption{
 		oauth2.SetAuthURLParam("code_challenge", pkce.CodeChallenge),
 		oauth2.SetAuthURLParam("code_challenge_method", pkce.Method),
+		oauth2.SetAuthURLParam("prompt", "select_account"), // Always show account selection
 	}
 	return p.config.AuthCodeURL(state, opts...)
 }

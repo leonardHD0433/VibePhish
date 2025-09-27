@@ -127,6 +127,9 @@ func (as *AdminServer) registerRoutes() {
 	router.HandleFunc("/login", mid.Use(as.Login, as.limiter.Limit))
 	router.HandleFunc("/logout", mid.Use(as.Logout, mid.RequireLogin))
 	router.HandleFunc("/reset_password", mid.Use(as.ResetPassword, mid.RequireLogin))
+	// OAuth SSO routes
+	router.HandleFunc("/auth/microsoft", mid.Use(as.OAuthMicrosoft))
+	router.HandleFunc("/auth/microsoft/callback", mid.Use(as.OAuthMicrosoftCallback))
 	router.HandleFunc("/campaigns", mid.Use(as.Campaigns, mid.RequireLogin))
 	router.HandleFunc("/campaigns/{id:[0-9]+}", mid.Use(as.CampaignID, mid.RequireLogin))
 	router.HandleFunc("/templates", mid.Use(as.Templates, mid.RequireLogin))
@@ -152,6 +155,8 @@ func (as *AdminServer) registerRoutes() {
 	if len(csrfKey) == 0 {
 		csrfKey = []byte(auth.GenerateSecureKey(auth.APIKeyLength))
 	}
+	// Debug: Print trusted origins
+	log.Infof("Loading CSRF with trusted origins: %v", as.config.TrustedOrigins)
 	csrfHandler := csrf.Protect(csrfKey,
 		csrf.FieldName("csrf_token"),
 		csrf.Secure(as.config.UseTLS),
@@ -355,16 +360,69 @@ func (as *AdminServer) Impersonate(w http.ResponseWriter, r *http.Request) {
 // Login handles the authentication flow for a user. If credentials are valid,
 // a session is created
 func (as *AdminServer) Login(w http.ResponseWriter, r *http.Request) {
-	params := struct {
-		User    models.User
-		Title   string
-		Flashes []interface{}
-		Token   string
-	}{Title: "Login", Token: csrf.Token(r)}
+	// Check if user is already authenticated
 	session := ctx.Get(r, "session").(*sessions.Session)
+	if currentUser := ctx.Get(r, "user"); currentUser != nil {
+		// User is already logged in, redirect to dashboard
+		next := r.URL.Query().Get("next")
+		if next != "" && isValidRedirectURL(next) {
+			http.Redirect(w, r, next, http.StatusFound)
+		} else {
+			http.Redirect(w, r, "/", http.StatusFound)
+		}
+		return
+	}
+
+	params := struct {
+		User                models.User
+		Title               string
+		Flashes             []interface{}
+		Token               string
+		SSOEnabled          bool
+		AllowLocalLogin     bool
+		HideLocalLogin      bool
+		EmergencyAccess     bool
+		EmergencyMode       bool
+		MicrosoftEnabled    bool
+	}{
+		Title:            "Login",
+		Token:            csrf.Token(r),
+		SSOEnabled:       true,  // Default assumption
+		AllowLocalLogin:  true,  // Will be determined by config
+		HideLocalLogin:   false, // Will be determined by config
+		EmergencyAccess:  true,  // Will be determined by config
+		EmergencyMode:    false,
+		MicrosoftEnabled: false,
+	}
+
+	// Load SSO configuration to determine login options
+	cfg, err := config.LoadConfigWithSSO("./config.json")
+	if err == nil && cfg.SSO != nil {
+		params.SSOEnabled = cfg.IsSSOEnabled()
+		params.AllowLocalLogin = cfg.ShouldAllowLocalLogin()
+		params.HideLocalLogin = cfg.ShouldHideLocalLogin()
+		params.EmergencyAccess = cfg.IsEmergencyAccessEnabled()
+		params.MicrosoftEnabled = cfg.IsProviderEnabled("microsoft")
+		params.EmergencyMode = r.URL.Query().Get("emergency") == "true"
+	}
+
 	switch {
 	case r.Method == "GET":
+		// Preserve OAuth session data before calling Flashes() which can clear session data
+		var oauthData = make(map[string]interface{})
+		for _, key := range []string{"oauth_state", "oauth_code_verifier", "oauth_provider", "oauth_timestamp", "oauth_nonce", "oauth_next"} {
+			if value, exists := session.Values[key]; exists {
+				oauthData[key] = value
+			}
+		}
+
 		params.Flashes = session.Flashes()
+
+		// Restore OAuth session data after Flashes()
+		for key, value := range oauthData {
+			session.Values[key] = value
+		}
+
 		session.Save(r, w)
 		templates := template.New("template")
 		_, err := templates.ParseFiles("templates/login.html", "templates/flashes.html")
@@ -373,11 +431,37 @@ func (as *AdminServer) Login(w http.ResponseWriter, r *http.Request) {
 		}
 		template.Must(templates, err).ExecuteTemplate(w, "base", params)
 	case r.Method == "POST":
+		// Check if this is an emergency login attempt
+		isEmergencyLogin := r.FormValue("emergency_login") == "true"
+
+		// If SSO is enabled and local login is disabled, only allow emergency access
+		if cfg != nil && cfg.IsSSOEnabled() && !cfg.ShouldAllowLocalLogin() && !isEmergencyLogin {
+			log.Warnf("Local login attempt blocked - SSO-only mode active")
+			as.handleInvalidLogin(w, r, "Please use Single Sign-On to access this system")
+			return
+		}
+
+		// If emergency access is disabled, block emergency login attempts
+		if isEmergencyLogin && cfg != nil && !cfg.IsEmergencyAccessEnabled() {
+			log.Warnf("Emergency login attempt blocked - emergency access disabled")
+			as.handleInvalidLogin(w, r, "Emergency access is not available")
+			return
+		}
+
 		// Find the user with the provided username
 		username, password := r.FormValue("username"), r.FormValue("password")
+		if username == "" || password == "" {
+			as.handleInvalidLogin(w, r, "Username and password are required")
+			return
+		}
+
 		u, err := models.GetUserByUsername(username)
 		if err != nil {
 			log.Error(err)
+			// Enhanced logging for emergency access attempts
+			if isEmergencyLogin {
+				log.Warnf("Emergency login attempt failed for username: %s", username)
+			}
 			as.handleInvalidLogin(w, r, "Invalid Username/Password")
 			return
 		}
@@ -385,21 +469,48 @@ func (as *AdminServer) Login(w http.ResponseWriter, r *http.Request) {
 		err = auth.ValidatePassword(password, u.Hash)
 		if err != nil {
 			log.Error(err)
+			// Enhanced logging for emergency access attempts
+			if isEmergencyLogin {
+				log.Warnf("Emergency login password validation failed for user: %s", username)
+			}
 			as.handleInvalidLogin(w, r, "Invalid Username/Password")
 			return
 		}
 		if u.AccountLocked {
+			if isEmergencyLogin {
+				log.Warnf("Emergency login attempt on locked account: %s", username)
+			}
 			as.handleInvalidLogin(w, r, "Account Locked")
 			return
 		}
+
+		// Log successful emergency access for security monitoring
+		if isEmergencyLogin {
+			log.Warnf("Emergency login successful for user: %s (ID: %d)", username, u.Id)
+		}
+
 		u.LastLogin = time.Now().UTC()
 		err = models.PutUser(&u)
 		if err != nil {
 			log.Error(err)
 		}
 		// If we've logged in, save the session and redirect to the dashboard
+		log.Infof("Login: Setting user ID %d in session", u.Id)
 		session.Values["id"] = u.Id
-		session.Save(r, w)
+		// Mark login method for security tracking
+		if isEmergencyLogin {
+			session.Values["auth_method"] = "emergency_local"
+			session.Values["auth_time"] = time.Now().Unix()
+		} else {
+			session.Values["auth_method"] = "local"
+		}
+		log.Infof("Login: Session values before save: %v", session.Values)
+		err = session.Save(r, w)
+		if err != nil {
+			log.Errorf("Login: Error saving session: %v", err)
+		} else {
+			log.Infof("Login: Session saved successfully")
+		}
 		as.nextOrIndex(w, r)
 	}
 }
@@ -475,6 +586,77 @@ func (as *AdminServer) ResetPassword(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// OAuthMicrosoft handles the Microsoft OAuth initiation endpoint
+func (as *AdminServer) OAuthMicrosoft(w http.ResponseWriter, r *http.Request) {
+
+	// Load config with SSO settings
+	cfg, err := config.LoadConfigWithSSO("./config.json")
+	if err != nil {
+		log.Errorf("Failed to load SSO config: %v", err)
+		Flash(w, r, "danger", "SSO is temporarily unavailable. Please use emergency access or try again later.")
+		http.Redirect(w, r, "/login?emergency=true", http.StatusTemporaryRedirect)
+		return
+	}
+
+	// Check if Microsoft SSO is enabled
+	if !cfg.IsSSOEnabled() || !cfg.IsProviderEnabled("microsoft") {
+		Flash(w, r, "warning", "Single Sign-On is currently disabled. Please use local login.")
+		http.Redirect(w, r, "/login?emergency=true", http.StatusFound)
+		return
+	}
+
+	// Create Microsoft OAuth provider
+	microsoftProvider := auth.NewMicrosoftProvider(cfg.SSO.Providers["microsoft"])
+	if microsoftProvider == nil {
+		log.Errorf("Failed to create Microsoft OAuth provider")
+		Flash(w, r, "danger", "Microsoft SSO is temporarily unavailable. Please use emergency access.")
+		http.Redirect(w, r, "/login?emergency=true", http.StatusTemporaryRedirect)
+		return
+	}
+
+	// Set the redirect URL for OAuth callback
+	redirectURL := "http://localhost:3333/auth/microsoft/callback"
+	microsoftProvider.SetRedirectURL(redirectURL)
+
+	// Create OAuth handler and initiate flow
+	userOps := models.GetOAuthUserOperations()
+	oauthHandler := auth.NewOAuthHandler(cfg, microsoftProvider, userOps)
+
+	// Add error recovery mechanism
+	defer func() {
+		if panicErr := recover(); panicErr != nil {
+			log.Errorf("OAuth initiation panic: %v", panicErr)
+			Flash(w, r, "danger", "SSO initialization failed. Please use emergency access.")
+			http.Redirect(w, r, "/login?emergency=true", http.StatusTemporaryRedirect)
+		}
+	}()
+
+	oauthHandler.InitiateMicrosoftOAuth(w, r)
+}
+
+// OAuthMicrosoftCallback handles the Microsoft OAuth callback endpoint
+func (as *AdminServer) OAuthMicrosoftCallback(w http.ResponseWriter, r *http.Request) {
+	// Load config with SSO settings
+	cfg, err := config.LoadConfigWithSSO("./config.json")
+	if err != nil {
+		log.Errorf("Failed to load SSO config: %v", err)
+		http.Error(w, "SSO configuration error", http.StatusInternalServerError)
+		return
+	}
+
+	// Create Microsoft OAuth provider
+	microsoftProvider := auth.NewMicrosoftProvider(cfg.SSO.Providers["microsoft"])
+
+	// Set the redirect URL for OAuth callback
+	redirectURL := "http://localhost:3333/auth/microsoft/callback"
+	microsoftProvider.SetRedirectURL(redirectURL)
+
+	// Create OAuth handler and handle callback
+	userOps := models.GetOAuthUserOperations()
+	oauthHandler := auth.NewOAuthHandler(cfg, microsoftProvider, userOps)
+	oauthHandler.HandleMicrosoftCallback(w, r)
+}
+
 // TODO: Make this execute the template, too
 func getTemplate(w http.ResponseWriter, tmpl string) *template.Template {
 	templates := template.New("template")
@@ -483,6 +665,20 @@ func getTemplate(w http.ResponseWriter, tmpl string) *template.Template {
 		log.Error(err)
 	}
 	return template.Must(templates, err)
+}
+
+// isValidRedirectURL validates that a redirect URL is safe
+func isValidRedirectURL(url string) bool {
+	// Only allow relative URLs starting with /
+	if !strings.HasPrefix(url, "/") {
+		return false
+	}
+	// Prevent protocol-relative URLs
+	if strings.HasPrefix(url, "//") {
+		return false
+	}
+	// Additional validation can be added here
+	return true
 }
 
 // Flash handles the rendering flash messages

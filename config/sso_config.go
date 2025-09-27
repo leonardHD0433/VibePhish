@@ -23,6 +23,9 @@ type SSOProvider struct {
 type SSOConfig struct {
 	Enabled          bool                    `json:"enabled"`
 	AllowLocalLogin  bool                    `json:"allow_local_login"`
+	HideLocalLogin   bool                    `json:"hide_local_login,omitempty"`
+	EmergencyAccess  bool                    `json:"emergency_access,omitempty"`
+	AdminEmails      []string                `json:"admin_emails,omitempty"`
 	Providers        map[string]*SSOProvider `json:"providers"`
 }
 
@@ -163,4 +166,141 @@ func (c *Config) GetEffectiveProvider(provider string) *SSOProvider {
 	}
 
 	return effective
+}
+
+// ShouldHideLocalLogin returns true if local login should be hidden from UI
+func (c *Config) ShouldHideLocalLogin() bool {
+	sso := c.GetSSOConfig()
+	// Hide local login if SSO is enabled and hide_local_login is true
+	// Or if allow_local_login is false (more restrictive)
+	return sso.Enabled && (sso.HideLocalLogin || !sso.AllowLocalLogin)
+}
+
+// IsEmergencyAccessEnabled returns true if emergency access is allowed
+func (c *Config) IsEmergencyAccessEnabled() bool {
+	sso := c.GetSSOConfig()
+	// Emergency access is enabled if explicitly set to true
+	// Or if allow_local_login is true (backward compatibility)
+	return sso.EmergencyAccess || sso.AllowLocalLogin
+}
+
+// ShouldAllowLocalLogin returns true if local login should be processed by backend
+func (c *Config) ShouldAllowLocalLogin() bool {
+	sso := c.GetSSOConfig()
+	// Allow local login processing if allow_local_login is true
+	// Even if it's hidden from UI, still allow for emergency access
+	return sso.AllowLocalLogin
+}
+
+// GetAdminEmails returns configured admin emails with environment variable override support
+func (c *Config) GetAdminEmails() []string {
+	sso := c.GetSSOConfig()
+
+	// Start with configured admin emails
+	adminEmails := make([]string, len(sso.AdminEmails))
+	copy(adminEmails, sso.AdminEmails)
+
+	// Check for environment variable override
+	if envEmail := os.Getenv("ADMIN_EMAIL"); envEmail != "" {
+		// Environment variable takes precedence, can be comma-separated
+		if !contains(adminEmails, envEmail) {
+			adminEmails = append(adminEmails, envEmail)
+		}
+	}
+
+	// Support multiple admin emails via comma-separated env var
+	if envEmails := os.Getenv("ADMIN_EMAILS"); envEmails != "" {
+		for _, email := range parseCommaSeparated(envEmails) {
+			if !contains(adminEmails, email) {
+				adminEmails = append(adminEmails, email)
+			}
+		}
+	}
+
+	return adminEmails
+}
+
+// IsAdminEmail checks if an email is configured as an admin email
+func (c *Config) IsAdminEmail(email string) bool {
+	adminEmails := c.GetAdminEmails()
+	for _, adminEmail := range adminEmails {
+		if equalFold(email, adminEmail) {
+			return true
+		}
+	}
+	return false
+}
+
+// Helper functions
+func contains(slice []string, item string) bool {
+	for _, s := range slice {
+		if equalFold(s, item) {
+			return true
+		}
+	}
+	return false
+}
+
+func equalFold(a, b string) bool {
+	return len(a) == len(b) &&
+		   (a == b ||
+		    (len(a) > 0 && len(b) > 0 &&
+			 toLower(a) == toLower(b)))
+}
+
+func toLower(s string) string {
+	result := make([]byte, len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 'A' && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		result[i] = c
+	}
+	return string(result)
+}
+
+func parseCommaSeparated(s string) []string {
+	if s == "" {
+		return nil
+	}
+
+	var result []string
+	var current string
+
+	for _, r := range s {
+		if r == ',' {
+			if trimmed := trimSpace(current); trimmed != "" {
+				result = append(result, trimmed)
+			}
+			current = ""
+		} else {
+			current += string(r)
+		}
+	}
+
+	if trimmed := trimSpace(current); trimmed != "" {
+		result = append(result, trimmed)
+	}
+
+	return result
+}
+
+func trimSpace(s string) string {
+	start := 0
+	end := len(s)
+
+	for start < end && isSpace(s[start]) {
+		start++
+	}
+
+	for end > start && isSpace(s[end-1]) {
+		end--
+	}
+
+	return s[start:end]
+}
+
+func isSpace(c byte) bool {
+	return c == ' ' || c == '\t' || c == '\n' || c == '\r'
 }

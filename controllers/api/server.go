@@ -86,9 +86,90 @@ func (as *Server) registerRoutes() {
 	router.HandleFunc("/webhooks/", mid.Use(as.Webhooks, mid.RequirePermission(models.PermissionModifySystem)))
 	router.HandleFunc("/webhooks/{id:[0-9]+}/validate", mid.Use(as.ValidateWebhook, mid.RequirePermission(models.PermissionModifySystem)))
 	router.HandleFunc("/webhooks/{id:[0-9]+}", mid.Use(as.Webhook, mid.RequirePermission(models.PermissionModifySystem)))
+
+	// Email authorization routes (admin-only)
+	router.HandleFunc("/email-authorization/emails", mid.Use(as.EmailAuthorizationEmails, mid.RequirePermission(models.PermissionModifySystem)))
+	router.HandleFunc("/email-authorization/emails/bulk", mid.Use(as.EmailAuthorizationEmailsBulk, mid.RequirePermission(models.PermissionModifySystem)))
+	router.HandleFunc("/email-authorization/emails/{id:[0-9]+}", mid.Use(as.EmailAuthorizationEmail, mid.RequirePermission(models.PermissionModifySystem)))
+	router.HandleFunc("/email-authorization/emails/{id:[0-9]+}/status", mid.Use(as.EmailAuthorizationEmailStatus, mid.RequirePermission(models.PermissionModifySystem)))
+	router.HandleFunc("/email-authorization/check", mid.Use(as.EmailAuthorizationCheck, mid.RequirePermission(models.PermissionModifySystem)))
+	router.HandleFunc("/email-authorization/logs", mid.Use(as.EmailAuthorizationLogs, mid.RequirePermission(models.PermissionModifySystem)))
+
 	as.handler = router
 }
 
 func (as *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	as.handler.ServeHTTP(w, r)
+}
+
+// Email Authorization API handlers
+
+// EmailAuthorizationEmails handles CRUD operations for authorized emails
+func (as *Server) EmailAuthorizationEmails(w http.ResponseWriter, r *http.Request) {
+	api := EmailAuthorizationAPI{}
+	switch r.Method {
+	case http.MethodGet:
+		api.GetAuthorizedEmails(w, r)
+	case http.MethodPost:
+		api.AddAuthorizedEmail(w, r)
+	default:
+		JSONResponse(w, models.Response{Success: false, Message: "Method not allowed"}, http.StatusMethodNotAllowed)
+	}
+}
+
+// EmailAuthorizationEmailsBulk handles bulk operations for authorized emails
+func (as *Server) EmailAuthorizationEmailsBulk(w http.ResponseWriter, r *http.Request) {
+	api := EmailAuthorizationAPI{}
+	switch r.Method {
+	case http.MethodPost:
+		api.BulkAddAuthorizedEmails(w, r)
+	default:
+		JSONResponse(w, models.Response{Success: false, Message: "Method not allowed"}, http.StatusMethodNotAllowed)
+	}
+}
+
+// EmailAuthorizationEmail handles operations for individual authorized emails
+func (as *Server) EmailAuthorizationEmail(w http.ResponseWriter, r *http.Request) {
+	api := EmailAuthorizationAPI{}
+	switch r.Method {
+	case http.MethodPut:
+		api.UpdateAuthorizedEmail(w, r)
+	case http.MethodDelete:
+		api.DeleteAuthorizedEmail(w, r)
+	default:
+		JSONResponse(w, models.Response{Success: false, Message: "Method not allowed"}, http.StatusMethodNotAllowed)
+	}
+}
+
+// EmailAuthorizationEmailStatus handles status updates for authorized emails
+func (as *Server) EmailAuthorizationEmailStatus(w http.ResponseWriter, r *http.Request) {
+	api := EmailAuthorizationAPI{}
+	switch r.Method {
+	case http.MethodPatch:
+		api.UpdateAuthorizedEmailStatus(w, r)
+	default:
+		JSONResponse(w, models.Response{Success: false, Message: "Method not allowed"}, http.StatusMethodNotAllowed)
+	}
+}
+
+// EmailAuthorizationCheck handles email authorization checks
+func (as *Server) EmailAuthorizationCheck(w http.ResponseWriter, r *http.Request) {
+	api := EmailAuthorizationAPI{}
+	switch r.Method {
+	case http.MethodGet:
+		api.CheckEmailAuthorization(w, r)
+	default:
+		JSONResponse(w, models.Response{Success: false, Message: "Method not allowed"}, http.StatusMethodNotAllowed)
+	}
+}
+
+// EmailAuthorizationLogs handles authorization audit log retrieval
+func (as *Server) EmailAuthorizationLogs(w http.ResponseWriter, r *http.Request) {
+	api := EmailAuthorizationAPI{}
+	switch r.Method {
+	case http.MethodGet:
+		api.GetAuthorizationLogs(w, r)
+	default:
+		JSONResponse(w, models.Response{Success: false, Message: "Method not allowed"}, http.StatusMethodNotAllowed)
+	}
 }

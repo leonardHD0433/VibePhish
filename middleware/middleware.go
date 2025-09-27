@@ -7,13 +7,14 @@ import (
 	"strings"
 
 	ctx "github.com/gophish/gophish/context"
+	log "github.com/gophish/gophish/logger"
 	"github.com/gophish/gophish/models"
 	"github.com/gorilla/csrf"
 )
 
 // CSRFExemptPrefixes are a list of routes that are exempt from CSRF protection
 var CSRFExemptPrefixes = []string{
-	"/api",
+	"/auth/microsoft/callback",
 }
 
 // CSRFExceptions is a middleware that prevents CSRF checks on routes listed in
@@ -51,18 +52,39 @@ func GetContext(handler http.Handler) http.HandlerFunc {
 		}
 		// Set the context appropriately here.
 		// Set the session
-		session, _ := Store.Get(r, "gophish")
+		session, err := Store.Get(r, "gophish")
+		log.Infof("GetContext: Session error: %v", err)
+		log.Infof("GetContext: Session values: %v", session.Values)
+
+		// Validate SSO session if present
+		if !ValidateSession(session) {
+			log.Warnf("GetContext: SSO session validation failed, clearing session")
+			// Clear invalid session
+			delete(session.Values, "id")
+			delete(session.Values, "sso_context")
+			session.Save(r, w)
+		}
+
 		// Put the session in the context so that we can
 		// reuse the values in different handlers
 		r = ctx.Set(r, "session", session)
 		if id, ok := session.Values["id"]; ok {
+			log.Infof("GetContext: Found user ID in session: %v", id)
 			u, err := models.GetUser(id.(int64))
 			if err != nil {
+				log.Errorf("GetContext: Error getting user: %v", err)
 				r = ctx.Set(r, "user", nil)
 			} else {
+				log.Infof("GetContext: Loaded user: %s (Auth: %s)", u.Username, GetAuthMethod(session))
 				r = ctx.Set(r, "user", u)
+
+				// Add SSO context to request context for templates
+				if ssoCtx, ok := session.Values["sso_context"].(*SSOSessionContext); ok {
+					r = ctx.Set(r, "sso_context", ssoCtx)
+				}
 			}
 		} else {
+			log.Infof("GetContext: No user ID in session")
 			r = ctx.Set(r, "user", nil)
 		}
 		handler.ServeHTTP(w, r)
@@ -113,16 +135,30 @@ func RequireAPIKey(handler http.Handler) http.Handler {
 // If not, the function returns a 302 redirect to the login page.
 func RequireLogin(handler http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		log.Infof("RequireLogin: Checking path %s", r.URL.Path)
 		if u := ctx.Get(r, "user"); u != nil {
-			// If a password change is required for the user, then redirect them
-			// to the login page
+			log.Infof("RequireLogin: User found in context: %v", u)
+		} else {
+			log.Infof("RequireLogin: No user in context, redirecting to login")
+		}
+		if u := ctx.Get(r, "user"); u != nil {
 			currentUser := u.(models.User)
-			if currentUser.PasswordChangeRequired && r.URL.Path != "/reset_password" {
+
+			// Skip password change requirement for OAuth users (they don't have passwords)
+			if currentUser.PasswordChangeRequired && currentUser.OAuthProvider == "" && r.URL.Path != "/reset_password" {
 				q := r.URL.Query()
 				q.Set("next", r.URL.Path)
 				http.Redirect(w, r, fmt.Sprintf("/reset_password?%s", q.Encode()), http.StatusTemporaryRedirect)
 				return
 			}
+
+			// Ensure admin email authorization is set up for OAuth admin users
+			if currentUser.OAuthProvider != "" && currentUser.Role.Slug == models.RoleAdmin {
+				if err := models.EnsureAdminEmailAuthorization(); err != nil {
+					log.Warnf("Failed to ensure admin email authorization: %v", err)
+				}
+			}
+
 			handler.ServeHTTP(w, r)
 			return
 		}
