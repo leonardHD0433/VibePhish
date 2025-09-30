@@ -29,6 +29,14 @@ gophish_admin.key
 *.exe
 gophish.db*
 gophish
+fyphish
 .env
+.env.docker
 *.secret
 config-test.json
+.iteration
+.summary
+.issues
+.todo
+.learn
+ssl/

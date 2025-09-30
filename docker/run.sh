@@ -1,88 +1,97 @@
-#!/bin/bash
+#!/bin/sh
 
-# set config for admin_server
-if [ -n "${ADMIN_LISTEN_URL+set}" ] ; then
-    jq -r \
-        --arg ADMIN_LISTEN_URL "${ADMIN_LISTEN_URL}" \
-        '.admin_server.listen_url = $ADMIN_LISTEN_URL' config.json > config.json.tmp && \
-        cat config.json.tmp > config.json
-fi
-if [ -n "${ADMIN_USE_TLS+set}" ] ; then
-    jq -r \
-        --argjson ADMIN_USE_TLS "${ADMIN_USE_TLS}" \
-        '.admin_server.use_tls = $ADMIN_USE_TLS' config.json > config.json.tmp && \
-        cat config.json.tmp > config.json
-fi
-if [ -n "${ADMIN_CERT_PATH+set}" ] ; then
-    jq -r \
-        --arg ADMIN_CERT_PATH "${ADMIN_CERT_PATH}" \
-        '.admin_server.cert_path = $ADMIN_CERT_PATH' config.json > config.json.tmp && \
-        cat config.json.tmp > config.json
-fi
-if [ -n "${ADMIN_KEY_PATH+set}" ] ; then
-    jq -r \
-        --arg ADMIN_KEY_PATH "${ADMIN_KEY_PATH}" \
-        '.admin_server.key_path = $ADMIN_KEY_PATH' config.json > config.json.tmp && \
-        cat config.json.tmp > config.json
-fi
-if [ -n "${ADMIN_TRUSTED_ORIGINS+set}" ] ; then
-    jq -r \
-        --arg ADMIN_TRUSTED_ORIGINS "${ADMIN_TRUSTED_ORIGINS}" \
-        '.admin_server.trusted_origins = ($ADMIN_TRUSTED_ORIGINS|split(","))' config.json > config.json.tmp && \
-        cat config.json.tmp > config.json
+# Load environment variables from .env file if it exists
+if [ -f .env ]; then
+    echo "Loading environment variables from .env file..."
+    export $(grep -v '^#' .env | xargs)
 fi
 
-# set config for phish_server
-if [ -n "${PHISH_LISTEN_URL+set}" ] ; then
-    jq -r \
-        --arg PHISH_LISTEN_URL "${PHISH_LISTEN_URL}" \
-        '.phish_server.listen_url = $PHISH_LISTEN_URL' config.json > config.json.tmp && \
-        cat config.json.tmp > config.json
-fi
-if [ -n "${PHISH_USE_TLS+set}" ] ; then
-    jq -r \
-        --argjson PHISH_USE_TLS "${PHISH_USE_TLS}" \
-        '.phish_server.use_tls = $PHISH_USE_TLS' config.json > config.json.tmp && \
-        cat config.json.tmp > config.json
-fi
-if [ -n "${PHISH_CERT_PATH+set}" ] ; then
-    jq -r \
-        --arg PHISH_CERT_PATH "${PHISH_CERT_PATH}" \
-        '.phish_server.cert_path = $PHISH_CERT_PATH' config.json > config.json.tmp && \
-        cat config.json.tmp > config.json
-fi
-if [ -n "${PHISH_KEY_PATH+set}" ] ; then
-    jq -r \
-        --arg PHISH_KEY_PATH "${PHISH_KEY_PATH}" \
-        '.phish_server.key_path = $PHISH_KEY_PATH' config.json > config.json.tmp && \
-        cat config.json.tmp > config.json
+# Function to update JSON config safely
+update_config() {
+    local key="$1"
+    local value="$2"
+    local type="${3:-string}"
+
+    if [ -n "${value}" ]; then
+        if [ "$type" = "boolean" ]; then
+            jq --argjson val "$value" "$key = \$val" config.json > config.json.tmp
+        elif [ "$type" = "array" ]; then
+            jq --arg val "$value" "$key = (\$val|split(\",\"))" config.json > config.json.tmp
+        else
+            jq --arg val "$value" "$key = \$val" config.json > config.json.tmp
+        fi
+
+        if [ $? -eq 0 ]; then
+            mv config.json.tmp config.json
+        else
+            echo "Error updating $key, keeping original value"
+            rm -f config.json.tmp
+        fi
+    fi
+}
+
+echo "Starting FYPhish configuration..."
+
+# Substitute environment variables in config.json using envsubst
+envsubst < config.json > config.json.tmp && mv config.json.tmp config.json
+
+# Basic Gophish configuration
+update_config '.admin_server.listen_url' "$ADMIN_LISTEN_URL"
+update_config '.admin_server.use_tls' "$ADMIN_USE_TLS" "boolean"
+update_config '.admin_server.cert_path' "$ADMIN_CERT_PATH"
+update_config '.admin_server.key_path' "$ADMIN_KEY_PATH"
+update_config '.admin_server.trusted_origins' "$ADMIN_TRUSTED_ORIGINS" "array"
+
+update_config '.phish_server.listen_url' "$PHISH_LISTEN_URL"
+update_config '.phish_server.use_tls' "$PHISH_USE_TLS" "boolean"
+update_config '.phish_server.cert_path' "$PHISH_CERT_PATH"
+update_config '.phish_server.key_path' "$PHISH_KEY_PATH"
+
+update_config '.contact_address' "$CONTACT_ADDRESS"
+update_config '.db_name' "$DB_NAME"
+update_config '.db_path' "$DB_FILE_PATH"
+
+# FYPhish SSO Configuration
+update_config '.sso.enabled' "$SSO_ENABLED" "boolean"
+update_config '.sso.allow_local_login' "$ALLOW_LOCAL_LOGIN" "boolean"
+update_config '.sso.hide_local_login' "$HIDE_LOCAL_LOGIN" "boolean"
+update_config '.sso.emergency_access' "$EMERGENCY_ACCESS" "boolean"
+
+# Microsoft OAuth Configuration
+update_config '.sso.providers.microsoft.enabled' "$MICROSOFT_ENABLED" "boolean"
+update_config '.sso.providers.microsoft.client_id' "$MICROSOFT_CLIENT_ID"
+update_config '.sso.providers.microsoft.client_secret' "$MICROSOFT_CLIENT_SECRET"
+update_config '.sso.providers.microsoft.tenant_id' "$MICROSOFT_TENANT_ID"
+
+# Set Azure production environment
+if [ "$GO_ENV" = "production" ]; then
+    echo "Setting production configuration..."
+    update_config '.admin_server.listen_url' "0.0.0.0:3333"
+    # Use ADMIN_TRUSTED_ORIGINS if set, otherwise fall back to default
+    if [ -n "$ADMIN_TRUSTED_ORIGINS" ]; then
+        update_config '.admin_server.trusted_origins' "$ADMIN_TRUSTED_ORIGINS" "array"
+    else
+        update_config '.admin_server.trusted_origins' "https://phishsim.app,https://www.phishsim.app" "array"
+    fi
 fi
 
-# set contact_address
-if [ -n "${CONTACT_ADDRESS+set}" ] ; then
-    jq -r \
-        --arg CONTACT_ADDRESS "${CONTACT_ADDRESS}" \
-        '.contact_address = $CONTACT_ADDRESS' config.json > config.json.tmp && \
-        cat config.json.tmp > config.json
+echo "Final runtime configuration:"
+cat config.json | jq .
+
+# Verify required environment variables for production
+if [ "$GO_ENV" = "production" ]; then
+    if [ -z "$SESSION_SIGNING_KEY" ] || [ -z "$SESSION_ENCRYPTION_KEY" ]; then
+        echo "ERROR: SESSION_SIGNING_KEY and SESSION_ENCRYPTION_KEY are required for production"
+        exit 1
+    fi
+
+    if [ -z "$MICROSOFT_CLIENT_ID" ] || [ -z "$MICROSOFT_CLIENT_SECRET" ]; then
+        echo "ERROR: Microsoft OAuth credentials are required for production"
+        exit 1
+    fi
 fi
 
-# db_name has to be changed to mysql for mysql connection to work
-if [ -n "${DB_NAME+set}" ] ; then
-    jq -r \
-        --arg DB_NAME "${DB_NAME}" \
-        '.db_name = $DB_NAME' config.json > config.json.tmp && \
-        cat config.json.tmp > config.json
-fi
+echo "Starting FYPhish application..."
 
-if [ -n "${DB_FILE_PATH+set}" ] ; then
-    jq -r \
-        --arg DB_FILE_PATH "${DB_FILE_PATH}" \
-        '.db_path = $DB_FILE_PATH' config.json > config.json.tmp && \
-        cat config.json.tmp > config.json
-fi
-
-echo "Runtime configuration: "
-cat config.json
-
-# start gophish
-./gophish
+# Start the correct binary
+exec ./fyphish

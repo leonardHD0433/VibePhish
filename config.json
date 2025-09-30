@@ -1,41 +1,51 @@
 {
-	"admin_server": {
-		"listen_url": "127.0.0.1:3333",
-		"use_tls": false,
-		"cert_path": "gophish_admin.crt",
-		"key_path": "gophish_admin.key",
-		"trusted_origins": ["http://127.0.0.1:3333", "http://localhost:3333"]
-	},
-	"phish_server": {
-		"listen_url": "0.0.0.0:8080",
-		"use_tls": false,
-		"cert_path": "example.crt",
-		"key_path": "example.key"
-	},
-	"db_name": "sqlite3",
-	"db_path": "gophish.db",
-	"migrations_prefix": "db/db_",
-	"contact_address": "",
-	"logging": {
-		"filename": "",
-		"level": ""
-	},
-	"sso": {
-		"enabled": true,
-		"allow_local_login": true,
-		"hide_local_login": true,
-		"emergency_access": true,
-		"admin_emails": ["${ADMIN_EMAIL}"],
-		"providers": {
-			"microsoft": {
-				"enabled": true,
-				"client_id": "${MICROSOFT_CLIENT_ID}",
-				"client_secret": "${MICROSOFT_CLIENT_SECRET}",
-				"tenant_id": "${MICROSOFT_TENANT_ID:-common}",
-				"allowed_domains": ["outlook.com", "student.uow.edu.my"],
-				"admin_domains": ["${ADMIN_DOMAIN}"],
-				"default_role": "user"
-			}
-		}
-	}
+  "admin_server": {
+    "listen_url": "127.0.0.1:3333",
+    "use_tls": false,
+    "cert_path": "gophish_admin.crt",
+    "key_path": "gophish_admin.key",
+    "trusted_origins": [
+      "http://127.0.0.1:3333",
+      "http://localhost:3333"
+    ]
+  },
+  "phish_server": {
+    "listen_url": "0.0.0.0:8080",
+    "use_tls": false,
+    "cert_path": "example.crt",
+    "key_path": "example.key"
+  },
+  "db_name": "postgres",
+  "db_path": "${POSTGRES_CONNECTION_STRING}",
+  "migrations_prefix": "db/db_",
+  "contact_address": "",
+  "logging": {
+    "filename": "",
+    "level": ""
+  },
+  "sso": {
+    "enabled": true,
+    "allow_local_login": true,
+    "hide_local_login": true,
+    "emergency_access": true,
+    "admin_emails": [
+      "${ADMIN_EMAIL}"
+    ],
+    "providers": {
+      "microsoft": {
+        "enabled": true,
+        "client_id": "${MICROSOFT_CLIENT_ID}",
+        "client_secret": "${MICROSOFT_CLIENT_SECRET}",
+        "tenant_id": "${MICROSOFT_TENANT_ID}",
+        "allowed_domains": [
+          "outlook.com",
+          "student.uow.edu.my"
+        ],
+        "admin_domains": [
+          "outlook.com"
+        ],
+        "default_role": "user"
+      }
+    }
+  }
 }

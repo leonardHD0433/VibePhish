@@ -1,0 +1,286 @@
+package models
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"strings"
+	"time"
+
+	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
+	"github.com/Azure/azure-sdk-for-go/sdk/keyvault/azsecrets"
+	log "github.com/gophish/gophish/logger"
+)
+
+// AzureKeyVaultClient handles Azure Key Vault operations
+type AzureKeyVaultClient struct {
+	client    *azsecrets.Client
+	vaultURL  string
+	enabled   bool
+}
+
+var (
+	keyVaultClient *AzureKeyVaultClient
+)
+
+// InitializeAzureKeyVault initializes the Azure Key Vault client
+func InitializeAzureKeyVault() error {
+	vaultURL := GetEnvironmentVariable("KEY_VAULT_URL")
+	if vaultURL == "" {
+		log.Info("Azure Key Vault not configured, using environment variables only")
+		keyVaultClient = &AzureKeyVaultClient{
+			enabled: false,
+		}
+		return nil
+	}
+
+	// Create credential
+	var cred azidentity.ChainedTokenCredential
+	var err error
+
+	// Try different authentication methods in order of preference
+	if clientID := GetEnvironmentVariable("AZURE_CLIENT_ID"); clientID != "" {
+		// Use managed identity in Azure
+		managedIdentityCred, err := azidentity.NewManagedIdentityCredential(&azidentity.ManagedIdentityCredentialOptions{
+			ID: azidentity.ClientID(clientID),
+		})
+		if err == nil {
+			cred = azidentity.ChainedTokenCredential{
+				Sources: []azidentity.TokenCredential{managedIdentityCred},
+			}
+		}
+	} else {
+		// Fallback to default credential chain for local development
+		defaultCred, err := azidentity.NewDefaultAzureCredential(nil)
+		if err != nil {
+			log.Warnf("Failed to create Azure credential: %v", err)
+			keyVaultClient = &AzureKeyVaultClient{
+				enabled: false,
+			}
+			return nil
+		}
+		cred = azidentity.ChainedTokenCredential{
+			Sources: []azidentity.TokenCredential{defaultCred},
+		}
+	}
+
+	// Create Key Vault client
+	client, err := azsecrets.NewClient(vaultURL, &cred, nil)
+	if err != nil {
+		log.Errorf("Failed to create Azure Key Vault client: %v", err)
+		keyVaultClient = &AzureKeyVaultClient{
+			enabled: false,
+		}
+		return err
+	}
+
+	keyVaultClient = &AzureKeyVaultClient{
+		client:   client,
+		vaultURL: vaultURL,
+		enabled:  true,
+	}
+
+	log.Infof("Azure Key Vault client initialized successfully: %s", vaultURL)
+	return nil
+}
+
+// GetSecret retrieves a secret from Azure Key Vault
+func (kv *AzureKeyVaultClient) GetSecret(secretName string) (string, error) {
+	if !kv.enabled {
+		return "", fmt.Errorf("Azure Key Vault not enabled")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	response, err := kv.client.GetSecret(ctx, secretName, "", nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to get secret '%s': %v", secretName, err)
+	}
+
+	if response.Value == nil {
+		return "", fmt.Errorf("secret '%s' has no value", secretName)
+	}
+
+	return *response.Value, nil
+}
+
+// SetSecret stores a secret in Azure Key Vault
+func (kv *AzureKeyVaultClient) SetSecret(secretName, secretValue string) error {
+	if !kv.enabled {
+		return fmt.Errorf("Azure Key Vault not enabled")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	_, err := kv.client.SetSecret(ctx, secretName, azsecrets.SetSecretParameters{
+		Value: &secretValue,
+	}, nil)
+
+	if err != nil {
+		return fmt.Errorf("failed to set secret '%s': %v", secretName, err)
+	}
+
+	log.Infof("Secret '%s' stored successfully in Azure Key Vault", secretName)
+	return nil
+}
+
+// GetSecretWithFallback retrieves a secret from Key Vault with environment variable fallback
+func GetSecretWithFallback(secretName string) string {
+	// First try Azure Key Vault
+	if keyVaultClient != nil && keyVaultClient.enabled {
+		value, err := keyVaultClient.GetSecret(secretName)
+		if err == nil && value != "" {
+			log.Debugf("Retrieved secret '%s' from Azure Key Vault", secretName)
+			return value
+		}
+		log.Debugf("Failed to retrieve secret '%s' from Key Vault: %v", secretName, err)
+	}
+
+	// Fallback to environment variable
+	envVarName := strings.ToUpper(strings.ReplaceAll(secretName, "-", "_"))
+	envValue := GetEnvironmentVariable(envVarName)
+	if envValue != "" {
+		log.Debugf("Retrieved secret '%s' from environment variable", secretName)
+		return envValue
+	}
+
+	log.Warnf("Secret '%s' not found in Key Vault or environment variables", secretName)
+	return ""
+}
+
+// LoadSecretsFromKeyVault loads all required secrets for FYPhish from Key Vault
+func LoadSecretsFromKeyVault() map[string]string {
+	secrets := make(map[string]string)
+
+	// List of secrets to load
+	secretNames := []string{
+		"microsoft-client-id",
+		"microsoft-client-secret",
+		"microsoft-tenant-id",
+		"session-signing-key",
+		"session-encryption-key",
+		"mysql-admin-password",
+	}
+
+	for _, secretName := range secretNames {
+		value := GetSecretWithFallback(secretName)
+		if value != "" {
+			secrets[secretName] = value
+		}
+	}
+
+	log.Infof("Loaded %d secrets from Key Vault/environment", len(secrets))
+	return secrets
+}
+
+// ValidateKeyVaultConnection tests the connection to Azure Key Vault
+func ValidateKeyVaultConnection() error {
+	if keyVaultClient == nil || !keyVaultClient.enabled {
+		return fmt.Errorf("Azure Key Vault not initialized or enabled")
+	}
+
+	// Try to get a test secret (this will fail gracefully if secret doesn't exist)
+	_, err := keyVaultClient.GetSecret("connection-test")
+	if err != nil && !strings.Contains(err.Error(), "SecretNotFound") {
+		return fmt.Errorf("Key Vault connection test failed: %v", err)
+	}
+
+	log.Info("Azure Key Vault connection validated successfully")
+	return nil
+}
+
+// UpdateSecretsFromEnvironment updates Key Vault secrets from environment variables
+// This is useful for initial setup or secret rotation
+func UpdateSecretsFromEnvironment() error {
+	if keyVaultClient == nil || !keyVaultClient.enabled {
+		return fmt.Errorf("Azure Key Vault not initialized or enabled")
+	}
+
+	secretMappings := map[string]string{
+		"microsoft-client-id":     "MICROSOFT_CLIENT_ID",
+		"microsoft-client-secret": "MICROSOFT_CLIENT_SECRET",
+		"microsoft-tenant-id":     "MICROSOFT_TENANT_ID",
+		"session-signing-key":     "SESSION_SIGNING_KEY",
+		"session-encryption-key":  "SESSION_ENCRYPTION_KEY",
+	}
+
+	updatedCount := 0
+	for secretName, envVar := range secretMappings {
+		envValue := GetEnvironmentVariable(envVar)
+		if envValue != "" {
+			err := keyVaultClient.SetSecret(secretName, envValue)
+			if err != nil {
+				log.Errorf("Failed to update secret '%s': %v", secretName, err)
+				continue
+			}
+			updatedCount++
+		}
+	}
+
+	log.Infof("Updated %d secrets in Azure Key Vault from environment variables", updatedCount)
+	return nil
+}
+
+// GetEnvironmentVariable is a helper function to get environment variables
+func GetEnvironmentVariable(name string) string {
+	return os.Getenv(name)
+}
+
+// IsKeyVaultEnabled returns whether Azure Key Vault is enabled and available
+func IsKeyVaultEnabled() bool {
+	return keyVaultClient != nil && keyVaultClient.enabled
+}
+
+// RotateSecret generates a new value for a secret and stores it
+func RotateSecret(secretName string, generator func() string) error {
+	if keyVaultClient == nil || !keyVaultClient.enabled {
+		return fmt.Errorf("Azure Key Vault not initialized or enabled")
+	}
+
+	newValue := generator()
+	if newValue == "" {
+		return fmt.Errorf("secret generator returned empty value")
+	}
+
+	err := keyVaultClient.SetSecret(secretName, newValue)
+	if err != nil {
+		return fmt.Errorf("failed to rotate secret '%s': %v", secretName, err)
+	}
+
+	log.Infof("Successfully rotated secret '%s'", secretName)
+	return nil
+}
+
+// ListSecrets returns a list of all secrets in the Key Vault (names only)
+func ListSecrets() ([]string, error) {
+	if keyVaultClient == nil || !keyVaultClient.enabled {
+		return nil, fmt.Errorf("Azure Key Vault not initialized or enabled")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	var secrets []string
+	pager := keyVaultClient.client.NewListSecretsPager(nil)
+
+	for pager.More() {
+		page, err := pager.NextPage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list secrets: %v", err)
+		}
+
+		for _, secret := range page.Value {
+			if secret.ID != nil {
+				// Extract secret name from ID
+				parts := strings.Split(*secret.ID, "/")
+				if len(parts) > 0 {
+					secrets = append(secrets, parts[len(parts)-1])
+				}
+			}
+		}
+	}
+
+	return secrets, nil
+}

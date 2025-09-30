@@ -1,0 +1,552 @@
+# FYPhish CI/CD Pipeline - Multi-Account Azure with LocalStack Support
+# Optimized for efficient use of Azure free trial credits
+name: FYPhish CI/CD Pipeline
+
+on:
+  push:
+    branches: [main, develop, release/*]
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        default: 'development'
+        type: choice
+        options: ['development', 'staging', 'production']
+      azure_account:
+        description: 'Azure account to use (account1, account2, account3)'
+        required: true
+        default: 'account1'
+        type: choice
+        options: ['account1', 'account2', 'account3']
+      skip_localstack:
+        description: 'Skip LocalStack tests'
+        required: false
+        type: boolean
+        default: false
+
+env:
+  GO_VERSION: '1.23'
+  CONTAINER_REGISTRY: 'fyphishregistry.azurecr.io'
+  APP_NAME: 'fyphish'
+
+jobs:
+  # Job 1: Code Quality and Security Checks
+  code-quality:
+    name: Code Quality & Security Analysis
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      commit-sha: ${{ steps.version.outputs.commit-sha }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Cache Go modules
+        uses: actions/cache@v3
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Generate version info
+        id: version
+        run: |
+          VERSION=$(cat VERSION)
+          COMMIT_SHA=$(git rev-parse --short HEAD)
+          echo "version=${VERSION}-${COMMIT_SHA}" >> $GITHUB_OUTPUT
+          echo "commit-sha=${COMMIT_SHA}" >> $GITHUB_OUTPUT
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run security scan with gosec
+        uses: securecodewarrior/github-action-gosec@master
+        with:
+          args: '-fmt sarif -out gosec-results.sarif ./...'
+
+      - name: Upload SARIF file
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: gosec-results.sarif
+
+      - name: Run vulnerability check
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
+      - name: Run unit tests
+        run: |
+          go test -v -race -coverprofile=coverage.out ./...
+          go tool cover -html=coverage.out -o coverage.html
+
+      - name: Upload test coverage
+        uses: actions/upload-artifact@v3
+        with:
+          name: coverage-report
+          path: coverage.html
+
+      - name: Lint Go code
+        uses: golangci/golangci-lint-action@v3
+        with:
+          version: latest
+          args: --timeout=5m
+
+  # Job 2: LocalStack Integration Tests
+  localstack-tests:
+    name: LocalStack Azure Emulation Tests
+    runs-on: ubuntu-latest
+    if: ${{ !inputs.skip_localstack }}
+    needs: code-quality
+    services:
+      localstack:
+        image: localstack/localstack:latest
+        ports:
+          - 4566:4566
+        env:
+          SERVICES: s3,secretsmanager,iam,sts,cloudformation,logs
+          DEBUG: 1
+          DATA_DIR: /tmp/localstack/data
+          DOCKER_HOST: unix:///var/run/docker.sock
+        options: >-
+          --health-cmd="curl -f http://localhost:4566/_localstack/health"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=3
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Install LocalStack CLI
+        run: |
+          pip install localstack awscli-local
+
+      - name: Configure LocalStack Azure emulation
+        run: |
+          # Wait for LocalStack to be ready
+          curl -f http://localhost:4566/_localstack/health
+
+          # Create mock Azure resources
+          awslocal s3 mb s3://fyphish-config
+          awslocal s3 mb s3://fyphish-backups
+
+          # Create mock secrets
+          awslocal secretsmanager create-secret \
+            --name "/fyphish/dev/database" \
+            --secret-string '{"host":"localhost","port":"5432","database":"fyphish_test","username":"testuser","password":"testpass"}'
+
+          awslocal secretsmanager create-secret \
+            --name "/fyphish/dev/oauth" \
+            --secret-string '{"client_id":"test-client-id","client_secret":"test-client-secret","tenant_id":"test-tenant"}'
+
+      - name: Run integration tests against LocalStack
+        env:
+          AWS_ENDPOINT_URL: http://localhost:4566
+          AWS_ACCESS_KEY_ID: test
+          AWS_SECRET_ACCESS_KEY: test
+          AWS_DEFAULT_REGION: us-east-1
+          LOCALSTACK_MODE: true
+        run: |
+          go test -v -tags=integration ./test/integration/...
+
+      - name: Test database migrations
+        env:
+          DATABASE_URL: "postgres://testuser:testpass@localhost:5432/fyphish_test?sslmode=disable"
+          LOCALSTACK_MODE: true
+        run: |
+          # Start test database
+          docker run -d --name test-db \
+            -e POSTGRES_DB=fyphish_test \
+            -e POSTGRES_USER=testuser \
+            -e POSTGRES_PASSWORD=testpass \
+            -p 5432:5432 postgres:15
+
+          # Wait for database
+          sleep 10
+
+          # Run migration tests
+          go run ./cmd/migrate --direction=up --database-url="$DATABASE_URL"
+          go run ./cmd/migrate --direction=down --database-url="$DATABASE_URL"
+
+  # Job 3: Build Container Images
+  build-containers:
+    name: Build and Push Container Images
+    runs-on: ubuntu-latest
+    needs: [code-quality, localstack-tests]
+    if: always() && needs.code-quality.result == 'success' && (needs.localstack-tests.result == 'success' || needs.localstack-tests.result == 'skipped')
+    outputs:
+      image-tag: ${{ steps.build.outputs.image-tag }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Azure Container Registry
+        uses: azure/docker-login@v1
+        with:
+          login-server: ${{ env.CONTAINER_REGISTRY }}
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+
+      - name: Build and push container image
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./docker/Dockerfile.production
+          push: true
+          tags: |
+            ${{ env.CONTAINER_REGISTRY }}/${{ env.APP_NAME }}:${{ needs.code-quality.outputs.version }}
+            ${{ env.CONTAINER_REGISTRY }}/${{ env.APP_NAME }}:latest
+          build-args: |
+            VERSION=${{ needs.code-quality.outputs.version }}
+            COMMIT_SHA=${{ needs.code-quality.outputs.commit-sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64,linux/arm64
+
+      - name: Run container security scan
+        uses: anchore/scan-action@v3
+        with:
+          image: ${{ env.CONTAINER_REGISTRY }}/${{ env.APP_NAME }}:${{ needs.code-quality.outputs.version }}
+          fail-build: true
+          severity-cutoff: critical
+
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.CONTAINER_REGISTRY }}/${{ env.APP_NAME }}:${{ needs.code-quality.outputs.version }}
+          format: spdx-json
+          output-file: sbom.spdx.json
+
+      - name: Upload SBOM
+        uses: actions/upload-artifact@v3
+        with:
+          name: sbom
+          path: sbom.spdx.json
+
+  # Job 4: Infrastructure Deployment
+  infrastructure:
+    name: Deploy Infrastructure
+    runs-on: ubuntu-latest
+    needs: [code-quality]
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    strategy:
+      matrix:
+        environment:
+          - ${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'development' }}
+    environment: ${{ matrix.environment }}
+    outputs:
+      app-url: ${{ steps.terraform-output.outputs.app-url }}
+      resource-group: ${{ steps.terraform-output.outputs.resource-group }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ~1.6
+          terraform_wrapper: false
+
+      - name: Configure Azure credentials
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets[format('AZURE_CREDENTIALS_{0}', github.event_name == 'workflow_dispatch' && inputs.azure_account || 'ACCOUNT1')] }}
+
+      - name: Terraform Init
+        working-directory: ./infrastructure
+        run: |
+          terraform init \
+            -backend-config="resource_group_name=${{ secrets[format('TF_STATE_RESOURCE_GROUP_{0}', github.event_name == 'workflow_dispatch' && inputs.azure_account || 'ACCOUNT1')] }}" \
+            -backend-config="storage_account_name=${{ secrets[format('TF_STATE_STORAGE_ACCOUNT_{0}', github.event_name == 'workflow_dispatch' && inputs.azure_account || 'ACCOUNT1')] }}" \
+            -backend-config="container_name=tfstate" \
+            -backend-config="key=${{ matrix.environment }}.terraform.tfstate"
+
+      - name: Terraform Plan
+        working-directory: ./infrastructure
+        run: |
+          terraform plan \
+            -var="environment=${{ matrix.environment }}" \
+            -var="app_version=${{ needs.code-quality.outputs.version }}" \
+            -var="azure_account=${{ github.event_name == 'workflow_dispatch' && inputs.azure_account || 'account1' }}" \
+            -out=tfplan
+
+      - name: Terraform Apply
+        working-directory: ./infrastructure
+        run: terraform apply -auto-approve tfplan
+
+      - name: Get Terraform outputs
+        id: terraform-output
+        working-directory: ./infrastructure
+        run: |
+          echo "app-url=$(terraform output -raw app_url)" >> $GITHUB_OUTPUT
+          echo "resource-group=$(terraform output -raw resource_group_name)" >> $GITHUB_OUTPUT
+
+      - name: Upload Terraform state
+        uses: actions/upload-artifact@v3
+        with:
+          name: terraform-state-${{ matrix.environment }}
+          path: ./infrastructure/terraform.tfstate
+
+  # Job 5: Application Deployment
+  deploy:
+    name: Deploy Application
+    runs-on: ubuntu-latest
+    needs: [build-containers, infrastructure]
+    if: always() && needs.build-containers.result == 'success' && needs.infrastructure.result == 'success'
+    strategy:
+      matrix:
+        environment:
+          - ${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'development' }}
+    environment: ${{ matrix.environment }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure Azure credentials
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets[format('AZURE_CREDENTIALS_{0}', github.event_name == 'workflow_dispatch' && inputs.azure_account || 'ACCOUNT1')] }}
+
+      - name: Deploy to Azure Container Apps
+        uses: azure/container-apps-deploy-action@v1
+        with:
+          resource-group: ${{ needs.infrastructure.outputs.resource-group }}
+          container-app-name: fyphish-${{ matrix.environment }}
+          image: ${{ env.CONTAINER_REGISTRY }}/${{ env.APP_NAME }}:${{ needs.build-containers.outputs.image-tag }}
+          environment-variables: |
+            GO_ENV=${{ matrix.environment }}
+            APP_VERSION=${{ needs.code-quality.outputs.version }}
+
+      - name: Update OAuth callback URLs
+        run: |
+          # Update Azure AD app registration with new callback URL
+          APP_URL="${{ needs.infrastructure.outputs.app-url }}"
+          az ad app update \
+            --id ${{ secrets[format('AZURE_APP_ID_{0}', github.event_name == 'workflow_dispatch' && inputs.azure_account || 'ACCOUNT1')] }} \
+            --web-redirect-uris "https://${APP_URL}/auth/microsoft/callback"
+
+      - name: Run database migrations
+        run: |
+          # Run migrations against the deployed database
+          docker run --rm \
+            -e DATABASE_URL="${{ secrets[format('DATABASE_URL_{0}', matrix.environment)] }}" \
+            ${{ env.CONTAINER_REGISTRY }}/${{ env.APP_NAME }}:${{ needs.build-containers.outputs.image-tag }} \
+            ./fyphish --config=/app/config/production.json migrate
+
+  # Job 6: Health Checks and Verification
+  health-checks:
+    name: Health Checks & Deployment Verification
+    runs-on: ubuntu-latest
+    needs: [deploy, infrastructure]
+    if: always() && needs.deploy.result == 'success'
+    strategy:
+      matrix:
+        environment:
+          - ${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'development' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Wait for application startup
+        run: sleep 30
+
+      - name: Health check - Basic connectivity
+        run: |
+          APP_URL="${{ needs.infrastructure.outputs.app-url }}"
+          curl -f "https://${APP_URL}/health" || exit 1
+
+      - name: Health check - Database connectivity
+        run: |
+          APP_URL="${{ needs.infrastructure.outputs.app-url }}"
+          curl -f "https://${APP_URL}/health/database" || exit 1
+
+      - name: Health check - OAuth endpoints
+        run: |
+          APP_URL="${{ needs.infrastructure.outputs.app-url }}"
+          curl -f "https://${APP_URL}/auth/microsoft" || exit 1
+
+      - name: Run smoke tests
+        run: |
+          # Run basic functional tests against deployed application
+          go test -v -tags=smoke ./test/smoke/... \
+            -app-url="https://${{ needs.infrastructure.outputs.app-url }}"
+
+      - name: Performance baseline test
+        run: |
+          # Run basic load test to establish performance baseline
+          docker run --rm \
+            -v $(pwd)/test/performance:/scripts \
+            grafana/k6 run /scripts/baseline.js \
+            -e APP_URL="https://${{ needs.infrastructure.outputs.app-url }}"
+
+  # Job 7: Cost Monitoring and Cleanup
+  cost-monitoring:
+    name: Cost Monitoring & Resource Cleanup
+    runs-on: ubuntu-latest
+    needs: [infrastructure, deploy]
+    if: always() && (needs.infrastructure.result == 'success' || needs.deploy.result == 'success')
+    strategy:
+      matrix:
+        environment:
+          - ${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'development' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure Azure credentials
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets[format('AZURE_CREDENTIALS_{0}', github.event_name == 'workflow_dispatch' && inputs.azure_account || 'ACCOUNT1')] }}
+
+      - name: Check current costs
+        run: |
+          # Get current month's costs for the resource group
+          RESOURCE_GROUP="${{ needs.infrastructure.outputs.resource-group }}"
+          COSTS=$(az consumption usage list \
+            --query "[?resourceGroup=='${RESOURCE_GROUP}'].{cost: pretaxCost, currency: currency}" \
+            --output tsv | awk '{sum += $1} END {print sum}')
+
+          echo "Current costs for ${RESOURCE_GROUP}: $${COSTS}"
+
+          # Check if costs exceed threshold
+          COST_THRESHOLD=50  # $50 threshold
+          if (( $(echo "${COSTS} > ${COST_THRESHOLD}" | bc -l) )); then
+            echo "::warning::Costs exceed threshold! Current: $${COSTS}, Threshold: $${COST_THRESHOLD}"
+          fi
+
+      - name: Set up auto-shutdown for development environment
+        if: matrix.environment == 'development'
+        run: |
+          # Schedule container app to scale to 0 replicas during off-hours
+          az containerapp update \
+            --resource-group ${{ needs.infrastructure.outputs.resource-group }} \
+            --name fyphish-${{ matrix.environment }} \
+            --min-replicas 0 \
+            --max-replicas 1
+
+      - name: Clean up old resources
+        run: |
+          # Clean up resources older than 7 days in development
+          if [ "${{ matrix.environment }}" = "development" ]; then
+            CUTOFF_DATE=$(date -d '7 days ago' --iso-8601)
+
+            # Find and delete old resource groups
+            az group list \
+              --query "[?starts_with(name, 'fyphish-dev-') && createdTime < '${CUTOFF_DATE}'].name" \
+              --output tsv | while read -r RG_NAME; do
+              echo "Deleting old resource group: ${RG_NAME}"
+              az group delete --name "${RG_NAME}" --yes --no-wait
+            done
+          fi
+
+  # Job 8: Security Compliance Check
+  security-compliance:
+    name: Security Compliance Verification
+    runs-on: ubuntu-latest
+    needs: [deploy]
+    if: github.ref == 'refs/heads/main'
+    strategy:
+      matrix:
+        environment:
+          - ${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'development' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure Azure credentials
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets[format('AZURE_CREDENTIALS_{0}', github.event_name == 'workflow_dispatch' && inputs.azure_account || 'ACCOUNT1')] }}
+
+      - name: Run Azure Security Center assessment
+        run: |
+          # Check security recommendations for the resource group
+          RESOURCE_GROUP="${{ needs.infrastructure.outputs.resource-group }}"
+          az security assessment list \
+            --query "[?resourceDetails.resourceGroup=='${RESOURCE_GROUP}' && status.status=='Unhealthy'].{name: displayName, severity: status.severity}" \
+            --output table
+
+      - name: Check SSL/TLS configuration
+        run: |
+          APP_URL="${{ needs.infrastructure.outputs.app-url }}"
+          # Check SSL Labs rating (if available) or basic SSL check
+          echo | openssl s_client -connect "${APP_URL}:443" -servername "${APP_URL}" 2>/dev/null | \
+            openssl x509 -noout -dates
+
+      - name: Validate OAuth security configuration
+        run: |
+          # Verify OAuth configuration security
+          APP_URL="${{ needs.infrastructure.outputs.app-url }}"
+
+          # Check for proper HTTPS redirect
+          HTTP_RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" "http://${APP_URL}/auth/microsoft")
+          if [ "${HTTP_RESPONSE}" != "301" ] && [ "${HTTP_RESPONSE}" != "302" ]; then
+            echo "::error::OAuth endpoints should redirect HTTP to HTTPS"
+            exit 1
+          fi
+
+  # Job 9: Notification and Reporting
+  notification:
+    name: Deployment Notification
+    runs-on: ubuntu-latest
+    needs: [health-checks, cost-monitoring, security-compliance]
+    if: always()
+    steps:
+      - name: Prepare deployment summary
+        run: |
+          echo "## FYPhish Deployment Summary" > deployment-summary.md
+          echo "" >> deployment-summary.md
+          echo "**Environment:** ${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'development' }}" >> deployment-summary.md
+          echo "**Azure Account:** ${{ github.event_name == 'workflow_dispatch' && inputs.azure_account || 'account1' }}" >> deployment-summary.md
+          echo "**Version:** ${{ needs.code-quality.outputs.version }}" >> deployment-summary.md
+          echo "**Commit:** ${{ needs.code-quality.outputs.commit-sha }}" >> deployment-summary.md
+          echo "" >> deployment-summary.md
+          echo "**Results:**" >> deployment-summary.md
+          echo "- Code Quality: ${{ needs.code-quality.result }}" >> deployment-summary.md
+          echo "- LocalStack Tests: ${{ needs.localstack-tests.result }}" >> deployment-summary.md
+          echo "- Infrastructure: ${{ needs.infrastructure.result }}" >> deployment-summary.md
+          echo "- Deployment: ${{ needs.deploy.result }}" >> deployment-summary.md
+          echo "- Health Checks: ${{ needs.health-checks.result }}" >> deployment-summary.md
+          echo "- Security Compliance: ${{ needs.security-compliance.result }}" >> deployment-summary.md
+
+      - name: Comment on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const fs = require('fs');
+            const summary = fs.readFileSync('deployment-summary.md', 'utf8');
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: summary
+            });
+
+      - name: Send Teams notification
+        if: github.ref == 'refs/heads/main'
+        uses: skitionek/notify-microsoft-teams@master
+        with:
+          webhook_url: ${{ secrets.TEAMS_WEBHOOK_URL }}
+          job: ${{ toJson(job) }}
+          steps: ${{ toJson(steps) }}

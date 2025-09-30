@@ -1,45 +1,45 @@
 # Minify client side assets (JavaScript)
-FROM node:latest AS build-js
+FROM node:18-alpine AS build-js
 
 RUN npm install gulp gulp-cli -g
 
 WORKDIR /build
-COPY . .
+COPY package*.json ./
 RUN npm install --only=dev
+COPY . .
 RUN gulp
 
+# Build Golang binary (Pure Go - no CGO needed for PostgreSQL)
+FROM golang:1.24-alpine AS build-golang
 
-# Build Golang binary
-FROM golang:1.15.2 AS build-golang
-
-WORKDIR /go/src/github.com/gophish/gophish
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
 COPY . .
-RUN go get -v && go build -v
-
+RUN CGO_ENABLED=0 go build -v -o fyphish .
 
 # Runtime container
-FROM debian:stable-slim
+FROM alpine:latest
 
-RUN useradd -m -d /opt/gophish -s /bin/bash app
+RUN adduser -D -h /opt/fyphish -s /bin/sh app
 
-RUN apt-get update && \
-	apt-get install --no-install-recommends -y jq libcap2-bin ca-certificates && \
-	apt-get clean && \
-	rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+RUN apk add --no-cache ca-certificates jq envsubst
 
-WORKDIR /opt/gophish
-COPY --from=build-golang /go/src/github.com/gophish/gophish/ ./
+WORKDIR /opt/fyphish
+COPY --from=build-golang /app/fyphish ./
 COPY --from=build-js /build/static/js/dist/ ./static/js/dist/
 COPY --from=build-js /build/static/css/dist/ ./static/css/dist/
-COPY --from=build-golang /go/src/github.com/gophish/gophish/config.json ./
-RUN chown app. config.json
+COPY --from=build-golang /app/static/ ./static/
+COPY --from=build-golang /app/templates/ ./templates/
+COPY --from=build-golang /app/db/ ./db/
+COPY --from=build-golang /app/docker/run.sh ./
+COPY --from=build-golang /app/VERSION ./
+COPY config.json ./
 
-RUN setcap 'cap_net_bind_service=+ep' /opt/gophish/gophish
+RUN chown -R app:app . && chmod +x run.sh
 
 USER app
-RUN sed -i 's/127.0.0.1/0.0.0.0/g' config.json
-RUN touch config.json.tmp
 
 EXPOSE 3333 8080 8443 80
 
-CMD ["./docker/run.sh"]
+CMD ["./run.sh"]

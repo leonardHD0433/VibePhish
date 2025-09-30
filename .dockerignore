@@ -1,0 +1,36 @@
+# Ignore sensitive files and development artifacts
+.env
+.env.*
+
+# Development files
+.git/
+.gitignore
+README.md
+*.md
+.todo/
+.claude/
+
+# Build artifacts
+*.log
+fyphish
+gophish
+
+# Test files
+*_test.go
+test/
+coverage.out
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# OS files
+.DS_Store
+Thumbs.db

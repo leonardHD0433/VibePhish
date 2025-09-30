@@ -10,7 +10,7 @@ import (
 	"os"
 	"time"
 
-	"bitbucket.org/liamstask/goose/lib/goose"
+	"github.com/pressly/goose/v3"
 
 	mysql "github.com/go-sql-driver/mysql"
 	"github.com/gophish/gophish/auth"
@@ -18,7 +18,7 @@ import (
 
 	log "github.com/gophish/gophish/logger"
 	"github.com/jinzhu/gorm"
-	_ "github.com/mattn/go-sqlite3" // Blank import needed to import sqlite3
+	_ "github.com/lib/pq" // PostgreSQL driver
 )
 
 var db *gorm.DB
@@ -81,21 +81,21 @@ func generateSecureKey() string {
 	return fmt.Sprintf("%x", k)
 }
 
-func chooseDBDriver(name, openStr string) goose.DBDriver {
-	d := goose.DBDriver{Name: name, OpenStr: openStr}
+// GetEnvironmentVariable is a helper function to get environment variables
+func GetEnvironmentVariable(name string) string {
+	return os.Getenv(name)
+}
 
+func getDBDriverName(name string) string {
 	switch name {
 	case "mysql":
-		d.Import = "github.com/go-sql-driver/mysql"
-		d.Dialect = &goose.MySqlDialect{}
-
+		return "mysql"
+	case "postgres":
+		return "postgres"
 	// Default database is sqlite3
 	default:
-		d.Import = "github.com/mattn/go-sqlite3"
-		d.Dialect = &goose.Sqlite3Dialect{}
+		return "sqlite3"
 	}
-
-	return d
 }
 
 func createTemporaryPassword(u *User) error {
@@ -133,18 +133,13 @@ func createTemporaryPassword(u *User) error {
 func Setup(c *config.Config) error {
 	// Setup the package-scoped config
 	conf = c
-	// Setup the goose configuration
-	migrateConf := &goose.DBConf{
-		MigrationsDir: conf.MigrationsPath,
-		Env:           "production",
-		Driver:        chooseDBDriver(conf.DBName, conf.DBPath),
-	}
-	// Get the latest possible migration
-	latest, err := goose.GetMostRecentDBVersion(migrateConf.MigrationsDir)
-	if err != nil {
-		log.Error(err)
-		return err
-	}
+	var err error
+
+	// Set the goose dialect and migrations directory
+	goose.SetDialect(getDBDriverName(conf.DBName))
+
+	// Set migrations directory
+	migrationsDir := conf.MigrationsPath
 
 	// Register certificates for tls encrypted db connections
 	if conf.DBSSLCaPath != "" {
@@ -192,7 +187,7 @@ func Setup(c *config.Config) error {
 		return err
 	}
 	// Migrate up to the latest version
-	err = goose.RunMigrationsOnDb(migrateConf, migrateConf.MigrationsDir, latest, db.DB())
+	err = goose.Up(db.DB(), migrationsDir)
 	if err != nil {
 		log.Error(err)
 		return err

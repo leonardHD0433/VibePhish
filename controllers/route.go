@@ -4,6 +4,7 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/tls"
+	"fmt"
 	"html/template"
 	"net/http"
 	"net/url"
@@ -39,6 +40,45 @@ type AdminServer struct {
 	worker  worker.Worker
 	config  config.AdminServer
 	limiter *ratelimit.PostLimiter
+}
+
+// buildOAuthRedirectURL constructs the OAuth callback URL based on server configuration
+func buildOAuthRedirectURL(cfg *config.Config, r *http.Request) string {
+	// Determine protocol with multiple detection methods
+	protocol := "http"
+
+	// Method 1: Check proxy headers (load balancer/reverse proxy)
+	if forwardedProto := r.Header.Get("X-Forwarded-Proto"); forwardedProto == "https" {
+		protocol = "https"
+	} else if r.Header.Get("X-Forwarded-Scheme") == "https" {
+		protocol = "https"
+	} else if strings.Contains(r.Host, "azurecontainerapps.io") {
+		// Method 2: Azure Container Apps always use HTTPS externally
+		protocol = "https"
+	} else if r.Header.Get("X-Forwarded-For") != "" {
+		// Method 3: Behind proxy, likely HTTPS in production
+		protocol = "https"
+	} else if cfg.AdminConf.UseTLS {
+		// Method 4: Config-based detection (for local HTTPS)
+		protocol = "https"
+	}
+
+	// Get host from request or config
+	host := r.Host
+	if host == "" {
+		// Fallback to config listen URL if no host in request
+		host = cfg.AdminConf.ListenURL
+	}
+
+	// Clean up host (remove protocol if present)
+	if strings.HasPrefix(host, "http://") {
+		host = strings.TrimPrefix(host, "http://")
+	}
+	if strings.HasPrefix(host, "https://") {
+		host = strings.TrimPrefix(host, "https://")
+	}
+
+	return fmt.Sprintf("%s://%s/auth/microsoft/callback", protocol, host)
 }
 
 var defaultTLSConfig = &tls.Config{
@@ -122,6 +162,12 @@ func (as *AdminServer) Shutdown() error {
 // This function returns an http.Handler to be used in http.ListenAndServe().
 func (as *AdminServer) registerRoutes() {
 	router := mux.NewRouter()
+	// Health check endpoints (no authentication required)
+	// TODO: Re-enable health endpoints after PostgreSQL migration
+	// router.HandleFunc("/health", as.HealthHandler)
+	// router.HandleFunc("/ready", as.ReadinessHandler)
+	// router.HandleFunc("/live", as.LivenessHandler)
+
 	// Base Front-end routes
 	router.HandleFunc("/", mid.Use(as.Base, mid.RequireLogin))
 	router.HandleFunc("/login", mid.Use(as.Login, as.limiter.Limit))
@@ -614,8 +660,9 @@ func (as *AdminServer) OAuthMicrosoft(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Set the redirect URL for OAuth callback
-	redirectURL := "http://localhost:3333/auth/microsoft/callback"
+	// Set the redirect URL for OAuth callback (dynamic based on server config)
+	redirectURL := buildOAuthRedirectURL(cfg, r)
+	log.Infof("Setting OAuth redirect URL to: %s", redirectURL)
 	microsoftProvider.SetRedirectURL(redirectURL)
 
 	// Create OAuth handler and initiate flow
@@ -647,8 +694,9 @@ func (as *AdminServer) OAuthMicrosoftCallback(w http.ResponseWriter, r *http.Req
 	// Create Microsoft OAuth provider
 	microsoftProvider := auth.NewMicrosoftProvider(cfg.SSO.Providers["microsoft"])
 
-	// Set the redirect URL for OAuth callback
-	redirectURL := "http://localhost:3333/auth/microsoft/callback"
+	// Set the redirect URL for OAuth callback (dynamic based on server config)
+	redirectURL := buildOAuthRedirectURL(cfg, r)
+	log.Infof("OAuth callback using redirect URL: %s", redirectURL)
 	microsoftProvider.SetRedirectURL(redirectURL)
 
 	// Create OAuth handler and handle callback

@@ -1,0 +1,443 @@
+# GitHub Actions Workflow for FYPhish Azure Deployment
+# Alternative to Azure DevOps with Azure integration
+# Supports multi-environment deployment and account migration
+
+name: 'FYPhish Azure Deployment'
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+      - release/*
+    paths-ignore:
+      - 'README.md'
+      - 'docs/**'
+      - '.gitignore'
+
+  pull_request:
+    branches:
+      - main
+      - develop
+    paths-ignore:
+      - 'README.md'
+      - 'docs/**'
+      - '.gitignore'
+
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - test
+          - prod
+      force_deploy:
+        description: 'Force deployment even if tests fail'
+        required: false
+        default: false
+        type: boolean
+
+# Environment variables
+env:
+  GO_VERSION: '1.23'
+  NODE_VERSION: '18'
+  AZURE_REGION: 'East US'
+
+# Determine environment based on branch
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.set-env.outputs.environment }}
+      unique-suffix: ${{ steps.set-env.outputs.unique-suffix }}
+      deploy-approval: ${{ steps.set-env.outputs.deploy-approval }}
+    steps:
+      - name: Determine environment
+        id: set-env
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            ENV="${{ github.event.inputs.environment }}"
+          elif [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            ENV="prod"
+          elif [ "${{ github.ref }}" = "refs/heads/develop" ]; then
+            ENV="test"
+          else
+            ENV="dev"
+          fi
+
+          # Generate unique suffix for resources
+          UNIQUE_SUFFIX=$(echo $RANDOM | md5sum | head -c 6)
+
+          # Set deployment approval requirement
+          if [ "$ENV" = "prod" ]; then
+            DEPLOY_APPROVAL="true"
+          else
+            DEPLOY_APPROVAL="false"
+          fi
+
+          echo "environment=$ENV" >> $GITHUB_OUTPUT
+          echo "unique-suffix=$UNIQUE_SUFFIX" >> $GITHUB_OUTPUT
+          echo "deploy-approval=$DEPLOY_APPROVAL" >> $GITHUB_OUTPUT
+
+          echo "Deploying to environment: $ENV"
+          echo "Unique suffix: $UNIQUE_SUFFIX"
+          echo "Requires approval: $DEPLOY_APPROVAL"
+
+  # Job 1: Build and Test
+  build-and-test:
+    runs-on: ubuntu-latest
+    needs: setup
+    environment: ${{ needs.setup.outputs.environment }}
+
+    steps:
+      # Checkout code
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Setup Go
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      # Setup Node.js
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      # Cache Go modules
+      - name: Cache Go modules
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      # Install dependencies
+      - name: Install Go dependencies
+        run: |
+          go mod download
+          go mod verify
+
+      - name: Install Node.js dependencies
+        run: |
+          npm ci
+          npm install -g gulp-cli
+
+      # Build frontend assets
+      - name: Build frontend assets
+        run: gulp
+
+      # Run tests
+      - name: Run Go tests
+        run: |
+          go test -v -race -coverprofile=coverage.out ./...
+
+      # Upload test results
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: test-results
+          path: |
+            coverage.out
+            test-results.xml
+
+      # Security scan
+      - name: Run security scan
+        run: |
+          go install github.com/sonatypecommunity/nancy@latest
+          go list -json -deps ./... | nancy sleuth
+        continue-on-error: true
+
+      # Build application
+      - name: Build Go application
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -installsuffix cgo -o fyphish .
+
+      # Upload build artifacts
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: fyphish-app
+          path: |
+            fyphish
+            static/
+            templates/
+            config.json
+            VERSION
+          retention-days: 30
+
+  # Job 2: Build and Push Container
+  build-container:
+    runs-on: ubuntu-latest
+    needs: [setup, build-and-test]
+    environment: ${{ needs.setup.outputs.environment }}
+    if: success()
+
+    steps:
+      # Checkout code
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Download build artifacts
+      - name: Download build artifacts
+        uses: actions/download-artifact@v3
+        with:
+          name: fyphish-app
+          path: .
+
+      # Azure login
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets[format('AZURE_CREDENTIALS_{0}', upper(needs.setup.outputs.environment))] }}
+
+      # Build and push to ACR
+      - name: Build and push Docker image
+        run: |
+          # Get ACR name from Azure
+          ACR_NAME=$(az acr list --resource-group rg-fyphish-${{ needs.setup.outputs.environment }}-${{ needs.setup.outputs.unique-suffix }} --query '[0].name' -o tsv 2>/dev/null || echo "")
+
+          if [ -z "$ACR_NAME" ]; then
+            echo "ACR not found, will be created in infrastructure deployment"
+            exit 0
+          fi
+
+          # Login to ACR
+          az acr login --name $ACR_NAME
+
+          # Build and push image
+          docker build -f infrastructure/docker/Dockerfile.optimized -t $ACR_NAME.azurecr.io/fyphish:${{ github.sha }} .
+          docker tag $ACR_NAME.azurecr.io/fyphish:${{ github.sha }} $ACR_NAME.azurecr.io/fyphish:latest
+          docker tag $ACR_NAME.azurecr.io/fyphish:${{ github.sha }} $ACR_NAME.azurecr.io/fyphish:${{ needs.setup.outputs.environment }}-latest
+
+          docker push $ACR_NAME.azurecr.io/fyphish:${{ github.sha }}
+          docker push $ACR_NAME.azurecr.io/fyphish:latest
+          docker push $ACR_NAME.azurecr.io/fyphish:${{ needs.setup.outputs.environment }}-latest
+
+      # Container security scan
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: '${{ steps.build.outputs.acr-name }}.azurecr.io/fyphish:${{ github.sha }}'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+        continue-on-error: true
+
+      - name: Upload Trivy scan results
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+  # Job 3: Deploy Infrastructure
+  deploy-infrastructure:
+    runs-on: ubuntu-latest
+    needs: [setup, build-container]
+    environment: ${{ needs.setup.outputs.environment }}
+    if: success()
+    outputs:
+      resource-group-name: ${{ steps.deploy-infra.outputs.resource-group-name }}
+      acr-name: ${{ steps.deploy-infra.outputs.acr-name }}
+      key-vault-name: ${{ steps.deploy-infra.outputs.key-vault-name }}
+      application-url: ${{ steps.deploy-infra.outputs.application-url }}
+
+    steps:
+      # Checkout code
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Azure login
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets[format('AZURE_CREDENTIALS_{0}', upper(needs.setup.outputs.environment))] }}
+
+      # Deploy infrastructure
+      - name: Deploy Azure infrastructure
+        id: deploy-infra
+        run: |
+          # Deploy Bicep template
+          DEPLOYMENT_NAME="fyphish-${{ needs.setup.outputs.environment }}-${{ github.run_number }}"
+
+          az deployment sub create \
+            --location "${{ env.AZURE_REGION }}" \
+            --template-file infrastructure/bicep/main.bicep \
+            --parameters \
+              environment=${{ needs.setup.outputs.environment }} \
+              uniqueSuffix=${{ needs.setup.outputs.unique-suffix }} \
+              adminEmail="${{ secrets.ADMIN_EMAIL }}" \
+              allowedDomain="${{ secrets.ALLOWED_DOMAIN }}" \
+              enableReadReplica=${{ needs.setup.outputs.environment == 'prod' }} \
+              enableAppGateway=${{ needs.setup.outputs.environment == 'prod' }} \
+            --name "$DEPLOYMENT_NAME"
+
+          # Get deployment outputs
+          OUTPUTS=$(az deployment sub show --name "$DEPLOYMENT_NAME" --query 'properties.outputs' -o json)
+
+          echo "resource-group-name=$(echo $OUTPUTS | jq -r '.resourceGroupName.value')" >> $GITHUB_OUTPUT
+          echo "acr-name=$(echo $OUTPUTS | jq -r '.acrName.value')" >> $GITHUB_OUTPUT
+          echo "key-vault-name=$(echo $OUTPUTS | jq -r '.keyVaultName.value')" >> $GITHUB_OUTPUT
+          echo "application-url=$(echo $OUTPUTS | jq -r '.applicationUrl.value')" >> $GITHUB_OUTPUT
+
+  # Job 4: Configure Secrets
+  configure-secrets:
+    runs-on: ubuntu-latest
+    needs: [setup, deploy-infrastructure]
+    environment: ${{ needs.setup.outputs.environment }}
+    if: success()
+
+    steps:
+      # Azure login
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets[format('AZURE_CREDENTIALS_{0}', upper(needs.setup.outputs.environment))] }}
+
+      # Configure Key Vault secrets
+      - name: Configure Key Vault secrets
+        run: |
+          KV_NAME="${{ needs.deploy-infrastructure.outputs.key-vault-name }}"
+
+          # Generate session keys
+          SIGNING_KEY=$(openssl rand -hex 64)
+          ENCRYPTION_KEY=$(openssl rand -hex 32)
+          MYSQL_PASSWORD=$(openssl rand -base64 32)
+
+          # Set OAuth secrets
+          az keyvault secret set --vault-name $KV_NAME --name "microsoft-client-id" --value "${{ secrets.MICROSOFT_CLIENT_ID }}"
+          az keyvault secret set --vault-name $KV_NAME --name "microsoft-client-secret" --value "${{ secrets.MICROSOFT_CLIENT_SECRET }}"
+          az keyvault secret set --vault-name $KV_NAME --name "microsoft-tenant-id" --value "${{ secrets.MICROSOFT_TENANT_ID }}"
+
+          # Set session secrets
+          az keyvault secret set --vault-name $KV_NAME --name "session-signing-key" --value "$SIGNING_KEY"
+          az keyvault secret set --vault-name $KV_NAME --name "session-encryption-key" --value "$ENCRYPTION_KEY"
+
+          # Set database password
+          az keyvault secret set --vault-name $KV_NAME --name "mysql-admin-password" --value "$MYSQL_PASSWORD"
+
+  # Job 5: Deploy Application
+  deploy-application:
+    runs-on: ubuntu-latest
+    needs: [setup, deploy-infrastructure, configure-secrets]
+    environment: ${{ needs.setup.outputs.environment }}
+    if: success()
+
+    steps:
+      # Azure login
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets[format('AZURE_CREDENTIALS_{0}', upper(needs.setup.outputs.environment))] }}
+
+      # Deploy application
+      - name: Deploy application container
+        run: |
+          RG_NAME="${{ needs.deploy-infrastructure.outputs.resource-group-name }}"
+
+          # Find and restart container instances
+          CONTAINER_GROUPS=$(az container list --resource-group $RG_NAME --query '[].name' -o tsv)
+
+          for cg in $CONTAINER_GROUPS; do
+            echo "Restarting container group: $cg"
+            az container restart --resource-group $RG_NAME --name $cg
+          done
+
+          # Wait for deployment
+          echo "Waiting for application to start..."
+          sleep 60
+
+  # Job 6: Integration Tests
+  integration-tests:
+    runs-on: ubuntu-latest
+    needs: [setup, deploy-infrastructure, deploy-application]
+    environment: ${{ needs.setup.outputs.environment }}
+    if: success()
+
+    steps:
+      # Health checks and integration tests
+      - name: Run integration tests
+        run: |
+          APP_URL="${{ needs.deploy-infrastructure.outputs.application-url }}"
+
+          echo "Testing application at: $APP_URL"
+
+          # Wait for application to be ready
+          for i in {1..20}; do
+            if curl -f "$APP_URL/health" > /dev/null 2>&1; then
+              echo "Health check passed"
+              break
+            fi
+            echo "Waiting for health check... (attempt $i/20)"
+            sleep 15
+          done
+
+          # Test endpoints
+          curl -f "$APP_URL/health" || exit 1
+          curl -f "$APP_URL/ready" || exit 1
+          curl -s "$APP_URL" | grep -q "FYPhish" || exit 1
+
+          echo "All integration tests passed"
+
+  # Job 7: Production Approval (manual gate)
+  production-approval:
+    runs-on: ubuntu-latest
+    needs: [setup, integration-tests]
+    environment:
+      name: production-approval
+      url: ${{ needs.deploy-infrastructure.outputs.application-url }}
+    if: needs.setup.outputs.environment == 'prod'
+
+    steps:
+      - name: Manual approval checkpoint
+        run: |
+          echo "Application deployed successfully to production"
+          echo "URL: ${{ needs.deploy-infrastructure.outputs.application-url }}"
+          echo "Please verify the deployment before approval"
+
+  # Job 8: Cleanup (for non-prod)
+  cleanup:
+    runs-on: ubuntu-latest
+    needs: [setup, integration-tests, deploy-infrastructure]
+    environment: ${{ needs.setup.outputs.environment }}
+    if: success() && needs.setup.outputs.environment != 'prod'
+
+    steps:
+      # Azure login
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets[format('AZURE_CREDENTIALS_{0}', upper(needs.setup.outputs.environment))] }}
+
+      # Tag resources for cleanup
+      - name: Tag resources for cleanup
+        run: |
+          RG_NAME="${{ needs.deploy-infrastructure.outputs.resource-group-name }}"
+
+          # Calculate cleanup date
+          if [ "${{ needs.setup.outputs.environment }}" = "dev" ]; then
+            CLEANUP_DAYS=7
+          else
+            CLEANUP_DAYS=14
+          fi
+
+          CLEANUP_DATE=$(date -d "+$CLEANUP_DAYS days" +%Y-%m-%d)
+
+          # Tag resource group
+          az group update \
+            --name $RG_NAME \
+            --set tags.AutoCleanup=$CLEANUP_DATE \
+            --set tags.Environment=${{ needs.setup.outputs.environment }} \
+            --set tags.GitHubRunId=${{ github.run_id }}
