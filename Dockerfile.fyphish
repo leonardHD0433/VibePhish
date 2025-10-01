@@ -32,7 +32,7 @@ COPY --from=build-js /build/static/css/dist/ ./static/css/dist/
 COPY --from=build-golang /app/static/ ./static/
 COPY --from=build-golang /app/templates/ ./templates/
 COPY --from=build-golang /app/db/ ./db/
-COPY --from=build-golang /app/docker/run.sh ./
+COPY --from=build-golang /app/docker/fyphish/run.sh ./
 COPY --from=build-golang /app/VERSION ./
 COPY config.json ./
 
