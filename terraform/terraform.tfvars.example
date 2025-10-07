@@ -1,0 +1,29 @@
+# Example terraform.tfvars - Copy to terraform.tfvars and fill in your actual values
+# terraform.tfvars is gitignored for security
+
+# Azure Service Principal Credentials
+arm_client_id       = "your-azure-service-principal-client-id"
+arm_client_secret   = "your-azure-service-principal-client-secret"
+arm_subscription_id = "your-azure-subscription-id"
+arm_tenant_id       = "your-azure-tenant-id"
+
+# PostgreSQL - Azure PostgreSQL admin credentials
+postgres_admin_login    = "fyphish_admin"
+postgres_admin_password = "your-postgres-admin-password"
+
+# PostgreSQL Connection String - For FYPhish application
+postgres_connection_string = "host=fyphish-db.postgres.database.azure.com port=5432 user=fyphish_admin password=your-password dbname=fyphish sslmode=require"
+
+# FYPhish Configuration
+admin_email                = "your-admin@outlook.com"
+microsoft_client_id        = "your-microsoft-client-id"
+microsoft_client_secret    = "your-microsoft-client-secret"
+microsoft_tenant_id        = "your-tenant-id-or-common"
+admin_domain               = "outlook.com"
+session_signing_key        = "generate-with-openssl-rand-hex-64"
+session_encryption_key     = "generate-with-openssl-rand-hex-32"
+go_env                     = "production"
+admin_listen_url           = "0.0.0.0:3333"
+admin_trusted_origins      = "https://your-app.azurecontainerapps.io"
+admin_base_url             = "https://your-app.azurecontainerapps.io"
+force_update               = ""
