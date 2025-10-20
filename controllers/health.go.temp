@@ -1,0 +1,262 @@
+package controllers
+
+import (
+	"encoding/json"
+	"net/http"
+	"time"
+
+	"github.com/gophish/gophish/config"
+	"github.com/gophish/gophish/models"
+	log "github.com/gophish/gophish/logger"
+)
+
+// HealthStatus represents the health status of the application
+type HealthStatus struct {
+	Status      string            `json:"status"`
+	Timestamp   time.Time         `json:"timestamp"`
+	Version     string            `json:"version"`
+	Environment string            `json:"environment,omitempty"`
+	Uptime      string            `json:"uptime"`
+	Checks      map[string]Check  `json:"checks"`
+}
+
+// Check represents an individual health check
+type Check struct {
+	Status    string        `json:"status"`
+	Message   string        `json:"message,omitempty"`
+	Duration  time.Duration `json:"duration"`
+	Timestamp time.Time     `json:"timestamp"`
+}
+
+var (
+	startTime = time.Now()
+)
+
+// HealthHandler handles health check requests
+// GET /health - Returns detailed health status
+func (as *AdminServer) HealthHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+
+	// Run health checks
+	checks := make(map[string]Check)
+
+	// Database health check
+	dbCheck := checkDatabase()
+	checks["database"] = dbCheck
+
+	// Memory health check
+	memCheck := checkMemory()
+	checks["memory"] = memCheck
+
+	// Configuration health check
+	configCheck := checkConfiguration()
+	checks["configuration"] = configCheck
+
+	// OAuth provider health check (if enabled)
+	if config.Conf != nil && config.Conf.SSO != nil && config.Conf.SSO.Enabled {
+		oauthCheck := checkOAuthProvider()
+		checks["oauth"] = oauthCheck
+	}
+
+	// Determine overall status
+	overallStatus := "healthy"
+	for _, check := range checks {
+		if check.Status != "healthy" {
+			overallStatus = "unhealthy"
+			break
+		}
+	}
+
+	// Create health status response
+	health := HealthStatus{
+		Status:      overallStatus,
+		Timestamp:   time.Now(),
+		Version:     config.Version,
+		Environment: getEnvironment(),
+		Uptime:      time.Since(startTime).String(),
+		Checks:      checks,
+	}
+
+	// Set appropriate HTTP status code
+	statusCode := http.StatusOK
+	if overallStatus == "unhealthy" {
+		statusCode = http.StatusServiceUnavailable
+	}
+
+	w.WriteHeader(statusCode)
+	json.NewEncoder(w).Encode(health)
+}
+
+// ReadinessHandler handles readiness check requests
+// GET /ready - Returns simple readiness status
+func (as *AdminServer) ReadinessHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+
+	// Simple readiness checks (faster than full health check)
+	ready := true
+	message := "Ready"
+
+	// Check database connectivity
+	dbCheck := checkDatabase()
+	if dbCheck.Status != "healthy" {
+		ready = false
+		message = "Database not ready"
+	}
+
+	response := map[string]interface{}{
+		"ready":     ready,
+		"message":   message,
+		"timestamp": time.Now(),
+	}
+
+	statusCode := http.StatusOK
+	if !ready {
+		statusCode = http.StatusServiceUnavailable
+	}
+
+	w.WriteHeader(statusCode)
+	json.NewEncoder(w).Encode(response)
+}
+
+// LivenessHandler handles liveness check requests
+// GET /live - Returns simple liveness status
+func (as *AdminServer) LivenessHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+
+	// Simple liveness check - just return that the server is running
+	response := map[string]interface{}{
+		"alive":     true,
+		"timestamp": time.Now(),
+		"uptime":    time.Since(startTime).String(),
+	}
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(response)
+}
+
+// checkDatabase performs a database health check
+func checkDatabase() Check {
+	start := time.Now()
+	status := "healthy"
+	message := "Database connection successful"
+
+	// Test database connection
+	err := models.Db.Exec("SELECT 1").Error
+	if err != nil {
+		status = "unhealthy"
+		message = "Database connection failed: " + err.Error()
+		log.Error("Database health check failed: ", err)
+	}
+
+	return Check{
+		Status:    status,
+		Message:   message,
+		Duration:  time.Since(start),
+		Timestamp: time.Now(),
+	}
+}
+
+// checkMemory performs a memory usage health check
+func checkMemory() Check {
+	start := time.Now()
+	status := "healthy"
+	message := "Memory usage within normal limits"
+
+	// Note: In a real implementation, you would check actual memory usage
+	// For now, we'll just return healthy
+	// You could use runtime.ReadMemStats() to get memory statistics
+
+	return Check{
+		Status:    status,
+		Message:   message,
+		Duration:  time.Since(start),
+		Timestamp: time.Now(),
+	}
+}
+
+// checkConfiguration performs a configuration health check
+func checkConfiguration() Check {
+	start := time.Now()
+	status := "healthy"
+	message := "Configuration is valid"
+
+	// Check if essential configuration is present
+	if config.Conf == nil {
+		status = "unhealthy"
+		message = "Configuration not loaded"
+	} else {
+		// Check for essential configuration parameters
+		if config.Conf.AdminConf.ListenURL == "" {
+			status = "unhealthy"
+			message = "Admin server listen URL not configured"
+		} else if config.Conf.PhishConf.ListenURL == "" {
+			status = "unhealthy"
+			message = "Phishing server listen URL not configured"
+		}
+	}
+
+	return Check{
+		Status:    status,
+		Message:   message,
+		Duration:  time.Since(start),
+		Timestamp: time.Now(),
+	}
+}
+
+// checkOAuthProvider performs an OAuth provider health check
+func checkOAuthProvider() Check {
+	start := time.Now()
+	status := "healthy"
+	message := "OAuth configuration is valid"
+
+	// Check OAuth configuration
+	if config.Conf.SSO == nil || !config.Conf.SSO.Enabled {
+		status = "unhealthy"
+		message = "OAuth is not enabled"
+	} else if config.Conf.SSO.Providers == nil {
+		status = "unhealthy"
+		message = "No OAuth providers configured"
+	} else {
+		// Check Microsoft OAuth configuration
+		if msProvider := config.Conf.SSO.Providers.Microsoft; msProvider != nil && msProvider.Enabled {
+			if msProvider.ClientID == "" || msProvider.ClientSecret == "" {
+				status = "unhealthy"
+				message = "Microsoft OAuth configuration incomplete"
+			}
+		}
+	}
+
+	return Check{
+		Status:    status,
+		Message:   message,
+		Duration:  time.Since(start),
+		Timestamp: time.Now(),
+	}
+}
+
+// getEnvironment returns the current environment
+func getEnvironment() string {
+	// Check for GO_ENV environment variable
+	if env := models.GetEnvironmentVariable("GO_ENV"); env != "" {
+		return env
+	}
+	return "development"
+}

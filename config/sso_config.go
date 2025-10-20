@@ -59,13 +59,20 @@ func (c *Config) IsProviderEnabled(provider string) bool {
 	return exists && p.Enabled && p.ClientID != ""
 }
 
-// LoadSecretsFromEnv populates OAuth secrets from environment variables
+// LoadSecretsFromEnv populates OAuth secrets and database credentials from environment variables
 // This allows keeping secrets out of config files while maintaining flexibility
 // It automatically tries to load .env file if present
 func (c *Config) LoadSecretsFromEnv() {
 	// Try to load .env file automatically (fail silently if not found)
 	c.loadDotEnv()
 
+	// Load database connection string from environment
+	if dbConn := os.Getenv("POSTGRES_CONNECTION_STRING"); dbConn != "" {
+		c.DBPath = dbConn
+		log.Info("Using PostgreSQL connection string from environment variable")
+	}
+
+	// Load SSO configuration if available
 	if c.SSO == nil || c.SSO.Providers == nil {
 		return
 	}

@@ -74,7 +74,7 @@
 </div>
 <!-- Modal -->
 <div class="modal fade" id="modal" tabindex="-1" role="dialog" aria-labelledby="myModalLabel">
-    <div class="modal-dialog" role="document">
+    <div class="modal-dialog modal-lg campaign-modal" role="document">
         <div class="modal-content">
             <div class="modal-header">
                 <button type="button" class="close" data-dismiss="modal" aria-label="Close" onclick="dismiss()">
@@ -84,46 +84,139 @@
             </div>
             <div class="modal-body" id="modal_body">
                 <div class="row" id="modal.flashes"></div>
-                <div class="form-group">
-                    <label for="name">Name:</label>
-                    <input type="text" class="form-control" id="name" placeholder="Campaign name" autofocus>
-                    <label class="control-label" for="template">Email Template:</label>
-                    <select class="form-control" placeholder="Template Name" id="template" />
-                    <option></option>
-                    </select>
-                    <label class="control-label" for="page">Landing Page:</label>
-                    <select class="form-control" placeholder="Landing Page" id="page" />
-                    <option></option>
-                    </select>
-                    <label class="control-label" for="url">URL:
-                        <i class="fa fa-question-circle" data-toggle="tooltip" data-placement="right" title="Location of Gophish listener (must be reachable by targets!)"></i>
-                    </label>
-                    <input type="text" class="form-control" placeholder="http://192.168.1.1" id="url" />
-                    <div class="row">
-                        <div class="col-md-6">
-                            <label class="control-label" for="url">Launch Date </label>
-                            <input type="text" class="form-control" id="launch_date" />
-                        </div>
-                        <div class="col-md-6">
-                            <label class="control-label" for="delay">Send Emails By (Optional)
-                                <i class="fa fa-question-circle" data-toggle="tooltip" data-placement="right" title="If specified, Gophish will send emails evenly between the campaign launch and this date."></i>
-                            </label>
-                            <input type="text" class="form-control" id="send_by_date" autocomplete="random-data"/> <!--Chrome ignores autocomplete="off".-->
+
+                <!-- Campaign Creation Mode Toggle -->
+                <div class="campaign-mode-toggle-wrapper">
+                    <div class="campaign-mode-toggle">
+                        <button type="button" class="mode-toggle-btn" data-mode="manual">
+                            <i class="fa fa-edit"></i>
+                            <span>Manual</span>
+                        </button>
+                        <button type="button" class="mode-toggle-btn active" data-mode="copilot">
+                            <i class="fa fa-magic"></i>
+                            <span>Copilot</span>
+                        </button>
+                        <button type="button" class="mode-toggle-btn" data-mode="auto">
+                            <i class="fa fa-rocket"></i>
+                            <span>Auto</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- AI Chatbox Interface (Copilot & Auto modes) -->
+                <div id="ai-chat-interface" class="ai-chat-interface">
+                    <div class="chat-mode-info">
+                        <div class="info-badge copilot-mode">
+                            <i class="fa fa-magic"></i>
+                            <span id="chat-mode-text">Copilot Mode - AI assists you in creating the campaign</span>
                         </div>
                     </div>
-                    <label class="control-label" for="profile">Sending Profile:</label>
-                    <div class="input-group">
-                        <select class="form-control" placeholder="Sending Profile" id="profile" />
+
+                    <div class="chat-container">
+                        <div class="chat-messages" id="chatMessages">
+                            <div class="chat-message ai-message">
+                                <div class="message-avatar">
+                                    <i class="fa fa-robot"></i>
+                                </div>
+                                <div class="message-content">
+                                    <p><strong>FYPhish AI Assistant</strong></p>
+                                    <p>Hello! I'm here to help you create an effective phishing campaign. Let's start by understanding your goals.</p>
+                                    <p>What type of campaign would you like to create?</p>
+                                    <div class="quick-suggestions">
+                                        <button class="suggestion-btn" onclick="sendQuickReply('Credential harvesting campaign')">
+                                            <i class="fa fa-key"></i> Credential Harvesting
+                                        </button>
+                                        <button class="suggestion-btn" onclick="sendQuickReply('Link clicking awareness')">
+                                            <i class="fa fa-link"></i> Link Awareness
+                                        </button>
+                                        <button class="suggestion-btn" onclick="sendQuickReply('Attachment awareness')">
+                                            <i class="fa fa-paperclip"></i> Attachment Awareness
+                                        </button>
+                                        <button class="suggestion-btn" onclick="sendQuickReply('Custom campaign')">
+                                            <i class="fa fa-cog"></i> Custom
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="chat-input-area">
+                            <div class="input-wrapper">
+                                <textarea
+                                    class="chat-input"
+                                    id="chatInput"
+                                    placeholder="Describe your campaign goals or ask for suggestions..."
+                                    rows="2"></textarea>
+                                <button class="send-btn" id="sendChatBtn" onclick="sendChatMessage()">
+                                    <i class="fa fa-paper-plane"></i>
+                                </button>
+                            </div>
+                            <div class="chat-footer-info">
+                                <small class="text-muted">
+                                    <i class="fa fa-lightbulb-o"></i>
+                                    Pro tip: Be specific about your target audience and campaign objectives
+                                </small>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Campaign Preview (shown after AI generates suggestions) -->
+                    <div class="campaign-preview" id="campaignPreview" style="display: none;">
+                        <div class="preview-header">
+                            <h5><i class="fa fa-eye"></i> Campaign Preview</h5>
+                            <button class="btn btn-sm btn-default" onclick="editCampaignDetails()">
+                                <i class="fa fa-edit"></i> Edit Details
+                            </button>
+                        </div>
+                        <div class="preview-content" id="previewContent">
+                            <!-- Preview will be populated by JavaScript -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Manual Form (Original form) -->
+                <div id="manual-form-interface" class="manual-form-interface" style="display: none;">
+                    <div class="form-group">
+                        <label for="name">Name:</label>
+                        <input type="text" class="form-control" id="name" placeholder="Campaign name" autofocus>
+                        <label class="control-label" for="template">Email Template:</label>
+                        <select class="form-control" placeholder="Template Name" id="template" />
                         <option></option>
                         </select>
-                        <span class="input-group-btn">
-                            <button type="button" data-toggle="modal" data-backdrop="static" data-target="#sendTestEmailModal"
-                                class="btn btn-primary button">
-                                <i class="fa fa-envelope"></i> Send Test Email</button>
-                        </span>
+                        <label class="control-label" for="page">Landing Page:</label>
+                        <select class="form-control" placeholder="Landing Page" id="page" />
+                        <option></option>
+                        </select>
+                        <label class="control-label" for="url">URL:
+                            <i class="fa fa-question-circle" data-toggle="tooltip" data-placement="right" title="Location of Gophish listener (must be reachable by targets!)"></i>
+                        </label>
+                        <input type="text" class="form-control" placeholder="http://192.168.1.1" id="url" />
+                        <div class="row">
+                            <div class="col-md-6">
+                                <label class="control-label" for="url">Launch Date </label>
+                                <input type="text" class="form-control" id="launch_date" />
+                            </div>
+                            <div class="col-md-6">
+                                <label class="control-label" for="delay">Send Emails By (Optional)
+                                    <i class="fa fa-question-circle" data-toggle="tooltip" data-placement="right" title="If specified, Gophish will send emails evenly between the campaign launch and this date."></i>
+                                </label>
+                                <input type="text" class="form-control" id="send_by_date" autocomplete="random-data"/> <!--Chrome ignores autocomplete="off".-->
+                            </div>
+                        </div>
+                        <label class="control-label" for="profile">Sending Profile:</label>
+                        <div class="input-group">
+                            <select class="form-control" placeholder="Sending Profile" id="profile" />
+                            <option></option>
+                            </select>
+                            <span class="input-group-btn">
+                                <button type="button" data-toggle="modal" data-backdrop="static" data-target="#sendTestEmailModal"
+                                    class="btn btn-primary button">
+                                    <i class="fa fa-envelope"></i> Send Test Email</button>
+                            </span>
+                        </div>
+                        <label class="control-label" for="users">Groups:</label>
+                        <select class="form-control" id="users" multiple="multiple"></select>
                     </div>
-                    <label class="control-label" for="users">Groups:</label>
-                    <select class="form-control" id="users" multiple="multiple"></select>
                 </div>
             </div>
             <div class="modal-footer">

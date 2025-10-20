@@ -70,8 +70,8 @@ func main() {
 	kingpin.CommandLine.HelpFlag.Short('h')
 	kingpin.Parse()
 
-	// Load the config
-	conf, err := config.LoadConfig(*configPath)
+	// Load the config with SSO and environment variable support
+	conf, err := config.LoadConfigWithSSO(*configPath)
 	// Just warn if a contact address hasn't been configured
 	if err != nil {
 		log.Fatal(err)

@@ -291,7 +291,303 @@ function copy(idx) {
         })
 }
 
+// ===================================================================
+// AI-Assisted Campaign Creation Functions
+// ===================================================================
+
+var currentCampaignMode = 'copilot'; // Default mode
+var chatHistory = [];
+
+// Switch between campaign creation modes with smooth morphing animations
+function switchCampaignMode(mode) {
+    currentCampaignMode = mode;
+
+    // Get the modal dialog element (this is what needs the width classes)
+    var $modal = $('#modal');
+    var $modalDialog = $modal.find('.modal-dialog');
+
+    // Add morphing class for animation state
+    $modalDialog.addClass('morphing');
+
+    // Remove all mode classes and add the new one to the modal-dialog
+    $modalDialog.removeClass('mode-manual mode-copilot mode-auto');
+    $modalDialog.addClass('mode-' + mode);
+
+    // Update toggle buttons with smooth transition
+    $('.mode-toggle-btn').removeClass('active');
+    $('[data-mode="' + mode + '"]').addClass('active');
+
+    // Update info badge with animation
+    if (mode === 'copilot') {
+        $('.info-badge').removeClass('auto-mode').addClass('copilot-mode');
+        $('.info-badge i').attr('class', 'fa fa-magic');
+        $('#chat-mode-text').text('Copilot Mode - AI assists you in creating the campaign');
+    } else if (mode === 'auto') {
+        $('.info-badge').removeClass('copilot-mode').addClass('auto-mode');
+        $('.info-badge i').attr('class', 'fa fa-rocket');
+        $('#chat-mode-text').text('Auto Mode - AI creates the campaign automatically');
+    }
+
+    // Show/hide appropriate interfaces with smooth animations
+    if (mode === 'manual') {
+        $('#ai-chat-interface').fadeOut(300, function() {
+            $('#manual-form-interface').fadeIn(300);
+        });
+        // Ensure form options are loaded when switching to manual mode
+        // Check if select2 has been initialized
+        if (!$('#template').hasClass('select2-hidden-accessible')) {
+            setupOptions();
+        }
+    } else {
+        $('#manual-form-interface').fadeOut(300, function() {
+            $('#ai-chat-interface').fadeIn(300);
+        });
+        resetChatInterface();
+    }
+
+    // Remove morphing class after animation completes (500ms)
+    setTimeout(function() {
+        $modalDialog.removeClass('morphing');
+    }, 500);
+}
+
+// Reset chat interface to initial state
+function resetChatInterface() {
+    chatHistory = [];
+    $('#chatMessages').html(`
+        <div class="chat-message ai-message">
+            <div class="message-avatar">
+                <i class="fa fa-robot"></i>
+            </div>
+            <div class="message-content">
+                <p><strong>FYPhish AI Assistant</strong></p>
+                <p>Hello! I'm here to help you create an effective phishing campaign. Let's start by understanding your goals.</p>
+                <p>What type of campaign would you like to create?</p>
+                <div class="quick-suggestions">
+                    <button class="suggestion-btn" onclick="sendQuickReply('Credential harvesting campaign')">
+                        <i class="fa fa-key"></i> Credential Harvesting
+                    </button>
+                    <button class="suggestion-btn" onclick="sendQuickReply('Link clicking awareness')">
+                        <i class="fa fa-link"></i> Link Awareness
+                    </button>
+                    <button class="suggestion-btn" onclick="sendQuickReply('Attachment awareness')">
+                        <i class="fa fa-paperclip"></i> Attachment Awareness
+                    </button>
+                    <button class="suggestion-btn" onclick="sendQuickReply('Custom campaign')">
+                        <i class="fa fa-cog"></i> Custom
+                    </button>
+                </div>
+            </div>
+        </div>
+    `);
+    $('#campaignPreview').hide();
+}
+
+// Send a chat message
+function sendChatMessage() {
+    var message = $('#chatInput').val().trim();
+    if (!message) return;
+
+    // Add user message to chat
+    addChatMessage('user', message);
+
+    // Clear input
+    $('#chatInput').val('');
+
+    // Show typing indicator
+    showTypingIndicator();
+
+    // Simulate AI response (TODO: Replace with actual LLM API call)
+    setTimeout(function() {
+        hideTypingIndicator();
+        processAIResponse(message);
+    }, 1500);
+}
+
+// Send a quick reply (suggestion button click)
+function sendQuickReply(message) {
+    $('#chatInput').val(message);
+    sendChatMessage();
+}
+
+// Add a message to the chat
+function addChatMessage(sender, message) {
+    var isUser = sender === 'user';
+    var avatarIcon = isUser ? 'fa-user' : 'fa-robot';
+    var messageClass = isUser ? 'user-message' : 'ai-message';
+
+    var messageHTML = `
+        <div class="chat-message ${messageClass}">
+            <div class="message-avatar">
+                <i class="fa ${avatarIcon}"></i>
+            </div>
+            <div class="message-content">
+                <p>${escapeHtml(message)}</p>
+            </div>
+        </div>
+    `;
+
+    $('#chatMessages').append(messageHTML);
+    scrollChatToBottom();
+
+    // Store in history
+    chatHistory.push({sender: sender, message: message});
+}
+
+// Show typing indicator
+function showTypingIndicator() {
+    var typingHTML = `
+        <div class="chat-message ai-message typing-message">
+            <div class="message-avatar">
+                <i class="fa fa-robot"></i>
+            </div>
+            <div class="message-content">
+                <div class="typing-indicator">
+                    <div class="typing-dot"></div>
+                    <div class="typing-dot"></div>
+                    <div class="typing-dot"></div>
+                </div>
+            </div>
+        </div>
+    `;
+    $('#chatMessages').append(typingHTML);
+    scrollChatToBottom();
+}
+
+// Hide typing indicator
+function hideTypingIndicator() {
+    $('.typing-message').remove();
+}
+
+// Scroll chat to bottom
+function scrollChatToBottom() {
+    var chatMessages = $('#chatMessages');
+    chatMessages.scrollTop(chatMessages[0].scrollHeight);
+}
+
+// Process AI response (Placeholder - will integrate with LLM)
+function processAIResponse(userMessage) {
+    var response = "I understand you want to create a campaign. Let me help you with that. ";
+
+    if (userMessage.toLowerCase().includes('credential')) {
+        response += "For credential harvesting, I recommend:\n\n";
+        response += "1. A realistic login page template\n";
+        response += "2. Targeting employees with access to sensitive systems\n";
+        response += "3. Using a scenario like password expiration\n\n";
+        response += "Would you like me to create this campaign for you?";
+
+        var aiMessageHTML = `
+            <div class="chat-message ai-message">
+                <div class="message-avatar">
+                    <i class="fa fa-robot"></i>
+                </div>
+                <div class="message-content">
+                    <p>${response}</p>
+                    <div class="quick-suggestions">
+                        <button class="suggestion-btn" onclick="generateCampaign('credential_harvesting')">
+                            <i class="fa fa-check"></i> Yes, create it
+                        </button>
+                        <button class="suggestion-btn" onclick="sendQuickReply('I need different options')">
+                            <i class="fa fa-times"></i> Show alternatives
+                        </button>
+                    </div>
+                </div>
+            </div>
+        `;
+        $('#chatMessages').append(aiMessageHTML);
+    } else {
+        response += "Could you provide more details about:\n• Target audience\n• Campaign objectives\n• Preferred scenario";
+        addChatMessage('ai', response);
+    }
+
+    scrollChatToBottom();
+}
+
+// Generate campaign based on AI suggestions (Placeholder)
+function generateCampaign(campaignType) {
+    addChatMessage('user', 'Yes, create it');
+    showTypingIndicator();
+
+    setTimeout(function() {
+        hideTypingIndicator();
+
+        // Populate form fields with AI-generated data
+        $('#name').val('Credential Harvesting - ' + moment().format('YYYY-MM-DD'));
+
+        // Show preview
+        showCampaignPreview({
+            name: 'Credential Harvesting - ' + moment().format('YYYY-MM-DD'),
+            type: 'Credential Harvesting',
+            template: 'Password Expiration Notice',
+            landingPage: 'Office365 Login',
+            targetGroups: 'Sales Department',
+            launchDate: moment().add(1, 'day').format('MMMM Do YYYY, h:mm a')
+        });
+
+        addChatMessage('ai', 'Great! I\'ve created a campaign preview for you. Review the details and click "Launch Campaign" when ready.');
+    }, 2000);
+}
+
+// Show campaign preview
+function showCampaignPreview(campaignData) {
+    var previewHTML = `
+        <div class="row">
+            <div class="col-md-6">
+                <p><strong>Campaign Name:</strong><br>${escapeHtml(campaignData.name)}</p>
+                <p><strong>Type:</strong><br>${escapeHtml(campaignData.type)}</p>
+                <p><strong>Email Template:</strong><br>${escapeHtml(campaignData.template)}</p>
+            </div>
+            <div class="col-md-6">
+                <p><strong>Landing Page:</strong><br>${escapeHtml(campaignData.landingPage)}</p>
+                <p><strong>Target Groups:</strong><br>${escapeHtml(campaignData.targetGroups)}</p>
+                <p><strong>Launch Date:</strong><br>${escapeHtml(campaignData.launchDate)}</p>
+            </div>
+        </div>
+    `;
+
+    $('#previewContent').html(previewHTML);
+    $('#campaignPreview').slideDown();
+
+    // Populate manual form in background
+    switchToManualFormSilently(campaignData);
+}
+
+// Populate manual form without showing it
+function switchToManualFormSilently(campaignData) {
+    $('#name').val(campaignData.name);
+    // Additional form population will happen here when integrated
+}
+
+// Edit campaign details
+function editCampaignDetails() {
+    switchCampaignMode('manual');
+}
+
+// Handle Enter key in chat input
+$(document).on('keydown', '#chatInput', function(e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendChatMessage();
+    }
+});
+
+// ===================================================================
+// End AI-Assisted Campaign Creation Functions
+// ===================================================================
+
 $(document).ready(function () {
+    // Setup mode toggle buttons
+    $('.mode-toggle-btn').on('click', function() {
+        var mode = $(this).data('mode');
+        switchCampaignMode(mode);
+    });
+
+    // Initialize modal dialog with copilot mode class (without animation)
+    $('#modal .modal-dialog').addClass('mode-copilot');
+
+    // Initialize in copilot mode
+    switchCampaignMode('copilot');
+
     $("#launch_date").datetimepicker({
         "widgetPositioning": {
             "vertical": "bottom"
