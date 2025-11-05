@@ -95,6 +95,16 @@ func (as *Server) registerRoutes() {
 	router.HandleFunc("/email-authorization/check", mid.Use(as.EmailAuthorizationCheck, mid.RequirePermission(models.PermissionModifySystem)))
 	router.HandleFunc("/email-authorization/logs", mid.Use(as.EmailAuthorizationLogs, mid.RequirePermission(models.PermissionModifySystem)))
 
+	// Email accounts routes (admin-only)
+	router.HandleFunc("/email_accounts/", mid.Use(as.EmailAccounts, mid.RequirePermission(models.PermissionModifySystem)))
+	router.HandleFunc("/email_accounts/{id:[0-9]+}", mid.Use(as.EmailAccount, mid.RequirePermission(models.PermissionModifySystem)))
+	router.HandleFunc("/email_accounts/type/{type}", mid.Use(as.EmailAccountByType, mid.RequirePermission(models.PermissionModifySystem)))
+
+	// Email types routes (admin-only)
+	router.HandleFunc("/email_types/", mid.Use(as.EmailTypes, mid.RequirePermission(models.PermissionModifySystem)))
+	router.HandleFunc("/email_types/all", mid.Use(as.EmailTypesAll, mid.RequirePermission(models.PermissionModifySystem)))
+	router.HandleFunc("/email_types/{id:[0-9]+}", mid.Use(as.EmailType, mid.RequirePermission(models.PermissionModifySystem)))
+
 	as.handler = router
 }
 

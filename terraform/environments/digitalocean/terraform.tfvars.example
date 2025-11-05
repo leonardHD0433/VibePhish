@@ -1,0 +1,157 @@
+# ============================================================================
+# FYPhish DigitalOcean Configuration Template
+# ============================================================================
+# INSTRUCTIONS:
+# 1. Copy this file to terraform.tfvars: cp terraform.tfvars.example terraform.tfvars
+# 2. Fill in your actual values below
+# 3. Never commit terraform.tfvars (it's gitignored for security)
+# ============================================================================
+
+# ============================================================================
+# DigitalOcean Authentication (REQUIRED)
+# ============================================================================
+# Get your API token: https://cloud.digitalocean.com/account/api/tokens
+# Click "Generate New Token", give it a name, check "Write" scope
+
+do_token = "dop_v1_your_digitalocean_api_token_here"
+
+# ============================================================================
+# General Configuration
+# ============================================================================
+
+project_name = "fyphish"
+environment  = "production"  # Options: development, staging, production
+
+# Region: sgp1 (Singapore), nyc1/3 (New York), sfo2/3 (San Francisco),
+#         lon1 (London), fra1 (Frankfurt), ams2/3 (Amsterdam)
+region = "sgp1"  # Singapore - recommended for Southeast Asia
+
+# ============================================================================
+# Container Registry
+# ============================================================================
+
+registry_name = "fyphish-registry"  # Must be globally unique, lowercase
+
+# Tier options:
+# - "starter" (FREE, 500MB storage)
+# - "basic" ($5/month, 5GB storage) - Recommended
+# - "professional" ($20/month, 100GB storage)
+registry_tier   = "basic"
+registry_region = "sgp1"  # Should match main region
+
+# ============================================================================
+# App Platform Configuration
+# ============================================================================
+
+app_name = "fyphish-app"
+
+# FYPhish App
+fyphish_instance_count = 1
+fyphish_instance_size  = "professional-xs"  # $12/month (512MB RAM, 1 vCPU)
+fyphish_image_repository = "fyphish"
+fyphish_image_tag        = "latest"
+
+# n8n Configuration
+n8n_instance_size = "professional-s"  # $24/month (1GB RAM, 1 vCPU)
+n8n_worker_count  = 1                 # Number of worker instances (1-5)
+n8n_worker_size   = "professional-s"
+
+# Instance Size Reference:
+# - basic-xxs:       $5/month  (512MB RAM, 0.5 vCPU) - Limited, not recommended
+# - basic-xs:        $10/month (512MB RAM, 1 vCPU)
+# - professional-xs: $12/month (512MB RAM, 1 vCPU)   - Good for small apps
+# - professional-s:  $24/month (1GB RAM, 1 vCPU)     - Recommended for production
+# - professional-m:  $48/month (2GB RAM, 2 vCPU)
+# - professional-l:  $96/month (4GB RAM, 4 vCPU)
+
+# ============================================================================
+# Database Configuration
+# ============================================================================
+
+postgres_cluster_name = "fyphish-postgres"
+postgres_size         = "db-s-1vcpu-1gb"  # $15/month - Basic tier
+postgres_user         = "fyphish_user"
+
+redis_cluster_name = "fyphish-redis"
+redis_size         = "db-s-1vcpu-1gb"  # $15/month
+
+# Database Size Reference:
+# - db-s-1vcpu-1gb:  $15/month  - Good for development/testing
+# - db-s-1vcpu-2gb:  $30/month  - Small production
+# - db-s-2vcpu-4gb:  $60/month  - Medium production
+# - db-s-4vcpu-8gb:  $120/month - Large production
+
+# ============================================================================
+# FYPhish Application Configuration (REQUIRED)
+# ============================================================================
+
+# Admin email (will have admin privileges in FYPhish)
+admin_email  = "your-admin@outlook.com"
+admin_domain = "outlook.com"  # Domain for admin authentication
+
+# ============================================================================
+# Microsoft OAuth Configuration (REQUIRED)
+# ============================================================================
+# Get these from Azure Portal > App Registrations > Your App
+# https://portal.azure.com/#blade/Microsoft_AAD_RegisteredApps/ApplicationsListBlade
+
+microsoft_client_id     = "your-azure-app-client-id"
+microsoft_client_secret = "your-azure-app-client-secret"
+microsoft_tenant_id     = "common"  # Or your specific tenant ID
+
+# IMPORTANT: After deployment, add the DigitalOcean redirect URI to Azure App Registration:
+# https://your-app-name.ondigitalocean.app/auth/microsoft/callback
+
+# ============================================================================
+# Session Security Keys (REQUIRED - Generate New Keys!)
+# ============================================================================
+# Generate with:
+#   openssl rand -hex 64   (for signing key)
+#   openssl rand -hex 32   (for encryption key)
+
+session_signing_key    = "your-128-character-hex-string-here"
+session_encryption_key = "your-64-character-hex-string-here"
+
+# Application environment
+go_env = "production"  # Options: production, development
+
+# ============================================================================
+# n8n Configuration (REQUIRED)
+# ============================================================================
+# Generate with:
+#   openssl rand -hex 32
+
+n8n_encryption_key = "your-n8n-encryption-key-here"
+n8n_jwt_secret     = "your-n8n-jwt-secret-here"
+
+# ============================================================================
+# Optional: Custom Domain
+# ============================================================================
+# If you want to use a custom domain instead of *.ondigitalocean.app
+# Requires DNS configuration (CNAME record pointing to DigitalOcean)
+
+# custom_domain = "fyphish.yourdomain.com"
+
+# ============================================================================
+# Optional: Admin IP for Database Access
+# ============================================================================
+# Your public IP address for direct database access (for management/debugging)
+# Find your IP: curl ifconfig.me
+
+# admin_ip_address = "203.0.113.123"  # Replace with your actual IP
+
+# ============================================================================
+# Cost Estimate for Default Configuration
+# ============================================================================
+# FYPhish App (professional-xs):         $12/month
+# n8n Main (professional-s):             $24/month
+# n8n Worker (professional-s × 1):       $24/month
+# PostgreSQL (db-s-1vcpu-1gb):           $15/month
+# Redis (db-s-1vcpu-1gb):                $15/month
+# Container Registry (basic):             $5/month
+# ─────────────────────────────────────────────────
+# TOTAL:                                 ~$95/month
+#
+# Azure comparison:                      ~$95/month
+# Potential savings: Adjust instance sizes for better value!
+# ============================================================================

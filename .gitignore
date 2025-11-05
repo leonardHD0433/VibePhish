@@ -40,3 +40,6 @@ config-test.json
 .todo
 .learn
 ssl/
+# n8n exports (contains sensitive credentials)
+n8n-exports/
+.crt

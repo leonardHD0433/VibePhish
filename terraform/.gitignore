@@ -29,4 +29,16 @@ secrets.tf
 # Lock file (optional - some teams commit this)
 # .terraform.lock.hcl
 
-*.md
+# Multi-cloud environment-specific secrets
+environments/**/terraform.tfvars
+environments/**/terraform.tfvars.json
+environments/**/secrets.tf
+environments/**/.terraform/
+environments/**/.terraform.lock.hcl
+environments/**/terraform.tfstate
+environments/**/terraform.tfstate.backup
+environments/**/crash.log
+
+# Keep README files (documentation)
+!README.md
+!MULTI_CLOUD_GUIDE.md

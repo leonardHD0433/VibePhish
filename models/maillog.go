@@ -131,7 +131,7 @@ func (m *MailLog) Success() error {
 	return err
 }
 
-// GetDialer returns a dialer based on the maillog campaign's SMTP configuration
+// GetDialer returns a dialer based on the maillog campaign's email account configuration
 func (m *MailLog) GetDialer() (mailer.Dialer, error) {
 	c := m.cachedCampaign
 	if c == nil {
@@ -141,7 +141,8 @@ func (m *MailLog) GetDialer() (mailer.Dialer, error) {
 		}
 		c = &campaign
 	}
-	return c.SMTP.GetDialer()
+	// Use n8n webhook dialer via EmailAccount
+	return c.EmailAccount.GetN8NDialer()
 }
 
 // CacheCampaign allows bulk-mail workers to cache the otherwise expensive
@@ -160,8 +161,8 @@ func (m *MailLog) GetSmtpFrom() (string, error) {
 		return "", err
 	}
 
-	f, err := mail.ParseAddress(c.SMTP.FromAddress)
-	return f.Address, err
+	// Return the email account address directly
+	return c.EmailAccount.Email, nil
 }
 
 // Generate fills in the details of a gomail.Message instance with
@@ -184,9 +185,10 @@ func (m *MailLog) Generate(msg *gomail.Message) error {
 
 	f, err := mail.ParseAddress(c.Template.EnvelopeSender)
 	if err != nil {
-		f, err = mail.ParseAddress(c.SMTP.FromAddress)
-		if err != nil {
-			return err
+		// Fallback to email account address
+		f = &mail.Address{
+			Address: c.EmailAccount.Email,
+			Name:    "", // Email account doesn't have a display name field
 		}
 	}
 	msg.SetAddressHeader("From", f.Address, f.Name)
@@ -209,21 +211,10 @@ func (m *MailLog) Generate(msg *gomail.Message) error {
 	}
 	msg.SetHeader("Message-Id", messageID)
 
-	// Parse the customHeader templates
-	for _, header := range c.SMTP.Headers {
-		key, err := ExecuteTemplate(header.Key, ptx)
-		if err != nil {
-			log.Warn(err)
-		}
-
-		value, err := ExecuteTemplate(header.Value, ptx)
-		if err != nil {
-			log.Warn(err)
-		}
-
-		// Add our header immediately
-		msg.SetHeader(key, value)
-	}
+	// NOTE: Custom headers are not supported with n8n webhook integration
+	// The n8n webhook only accepts email_type, recipients, subject, and message
+	// Custom headers would need to be configured directly in the n8n workflow
+	// if email header customization is required.
 
 	// Parse remaining templates
 	subject, err := ExecuteTemplate(c.Template.Subject, ptx)

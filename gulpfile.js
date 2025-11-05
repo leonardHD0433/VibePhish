@@ -59,6 +59,7 @@ scripts = function () {
             app_directory + 'landing_pages.js',
             app_directory + 'login.js',
             app_directory + 'sending_profiles.js',
+            app_directory + 'email_accounts.js',
             app_directory + 'settings.js',
             app_directory + 'templates.js',
             app_directory + 'gophish.js',

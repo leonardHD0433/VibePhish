@@ -1,18 +1,22 @@
 package models
 
 import (
+	"errors"
 	"fmt"
-	"net/mail"
 
 	"github.com/gophish/gomail"
 	"github.com/gophish/gophish/config"
 	log "github.com/gophish/gophish/logger"
 	"github.com/gophish/gophish/mailer"
+	"github.com/sirupsen/logrus"
 )
 
 // PreviewPrefix is the standard prefix added to the rid parameter when sending
 // test emails.
 const PreviewPrefix = "preview-"
+
+// ErrEmailTypeNotSpecified is returned when no email type is provided
+var ErrEmailTypeNotSpecified = errors.New("No email type specified")
 
 // EmailRequest is the structure of a request
 // to send a test email to test an SMTP connection.
@@ -23,14 +27,13 @@ type EmailRequest struct {
 	TemplateId  int64        `json:"-"`
 	Page        Page         `json:"page"`
 	PageId      int64        `json:"-"`
-	SMTP        SMTP         `json:"smtp"`
+	EmailType   string       `json:"email_type"`
 	URL         string       `json:"url"`
 	Tracker     string       `json:"tracker" gorm:"-"`
 	TrackingURL string       `json:"tracking_url" gorm:"-"`
 	UserId      int64        `json:"-"`
 	ErrorChan   chan (error) `json:"-" gorm:"-"`
 	RId         string       `json:"id"`
-	FromAddress string       `json:"-"`
 	BaseRecipient
 }
 
@@ -39,7 +42,9 @@ func (s *EmailRequest) getBaseURL() string {
 }
 
 func (s *EmailRequest) getFromAddress() string {
-	return s.FromAddress
+	// For n8n webhook, from address is determined by the email account selected
+	// Return placeholder address for template generation
+	return "test@fyphish.local"
 }
 
 // Validate ensures the SendTestEmailRequest structure
@@ -48,8 +53,8 @@ func (s *EmailRequest) Validate() error {
 	switch {
 	case s.Email == "":
 		return ErrEmailNotSpecified
-	case s.FromAddress == "" && s.SMTP.FromAddress == "":
-		return ErrFromAddressNotSpecified
+	case s.EmailType == "":
+		return ErrEmailTypeNotSpecified
 	}
 	return nil
 }
@@ -74,10 +79,6 @@ func (s *EmailRequest) Success() error {
 	return nil
 }
 
-func (s *EmailRequest) GetSmtpFrom() (string, error) {
-	return s.SMTP.FromAddress, nil
-}
-
 // PostEmailRequest stores a SendTestEmailRequest in the database.
 func PostEmailRequest(s *EmailRequest) error {
 	// Generate an ID to be used in the underlying Result object
@@ -100,56 +101,60 @@ func GetEmailRequestByResultId(id string) (EmailRequest, error) {
 // Generate fills in the details of a gomail.Message with the contents
 // from the SendTestEmailRequest.
 func (s *EmailRequest) Generate(msg *gomail.Message) error {
-	f, err := mail.ParseAddress(s.getFromAddress())
-	if err != nil {
-		return err
-	}
-	msg.SetAddressHeader("From", f.Address, f.Name)
+	log.Info("Generate() called - starting email generation")
 
 	ptx, err := NewPhishingTemplateContext(s, s.BaseRecipient, s.RId)
 	if err != nil {
+		log.Error("Error creating phishing template context:", err)
 		return err
 	}
 
+	log.Info("Template context created successfully")
+
+	log.Info("Executing URL template")
 	url, err := ExecuteTemplate(s.URL, ptx)
 	if err != nil {
+		log.Error("Error executing URL template:", err)
 		return err
 	}
 	s.URL = url
 
+	log.Info("Setting transparency headers")
 	// Add the transparency headers
 	msg.SetHeader("X-Mailer", config.ServerName)
 	if conf.ContactAddress != "" {
 		msg.SetHeader("X-Gophish-Contact", conf.ContactAddress)
 	}
 
-	// Parse the customHeader templates
-	for _, header := range s.SMTP.Headers {
-		key, err := ExecuteTemplate(header.Key, ptx)
-		if err != nil {
-			log.Error(err)
-		}
-
-		value, err := ExecuteTemplate(header.Value, ptx)
-		if err != nil {
-			log.Error(err)
-		}
-
-		// Add our header immediately
-		msg.SetHeader(key, value)
-	}
-
+	log.Info("Executing subject template")
 	// Parse remaining templates
 	subject, err := ExecuteTemplate(s.Template.Subject, ptx)
 	if err != nil {
-		log.Error(err)
+		log.Error("Error executing subject template:", err)
 	}
 	// don't set the Subject header if it is blank
 	if subject != "" {
 		msg.SetHeader("Subject", subject)
 	}
 
-	msg.SetHeader("To", s.FormatAddress())
+	log.Info("Subject header set, moving to To header")
+
+	// Use SetAddressHeader for proper email address formatting
+	log.WithFields(logrus.Fields{
+		"email":      s.Email,
+		"first_name": s.FirstName,
+		"last_name":  s.LastName,
+	}).Info("About to set To header")
+
+	if s.FirstName != "" && s.LastName != "" {
+		log.Info("Setting To with name")
+		msg.SetAddressHeader("To", s.Email, fmt.Sprintf("%s %s", s.FirstName, s.LastName))
+	} else {
+		log.Info("Setting To without name")
+		msg.SetAddressHeader("To", s.Email, "")
+	}
+
+	log.Info("To header set successfully")
 	if s.Template.Text != "" {
 		text, err := ExecuteTemplate(s.Template.Text, ptx)
 		if err != nil {
@@ -177,7 +182,7 @@ func (s *EmailRequest) Generate(msg *gomail.Message) error {
 	return nil
 }
 
-// GetDialer returns the mailer.Dialer for the underlying SMTP object
+// GetDialer is not needed for n8n webhook sending but kept for interface compatibility
 func (s *EmailRequest) GetDialer() (mailer.Dialer, error) {
-	return s.SMTP.GetDialer()
+	return nil, nil
 }

@@ -182,6 +182,7 @@ func (as *AdminServer) registerRoutes() {
 	router.HandleFunc("/groups", mid.Use(as.Groups, mid.RequireLogin))
 	router.HandleFunc("/landing_pages", mid.Use(as.LandingPages, mid.RequireLogin))
 	router.HandleFunc("/sending_profiles", mid.Use(as.SendingProfiles, mid.RequireLogin))
+	router.HandleFunc("/email_accounts", mid.Use(as.EmailAccounts, mid.RequirePermission(models.PermissionModifySystem), mid.RequireLogin))
 	router.HandleFunc("/settings", mid.Use(as.Settings, mid.RequireLogin))
 	router.HandleFunc("/users", mid.Use(as.UserManagement, mid.RequirePermission(models.PermissionModifySystem), mid.RequireLogin))
 	router.HandleFunc("/webhooks", mid.Use(as.Webhooks, mid.RequirePermission(models.PermissionModifySystem), mid.RequireLogin))
@@ -294,6 +295,13 @@ func (as *AdminServer) SendingProfiles(w http.ResponseWriter, r *http.Request) {
 	params := newTemplateParams(r)
 	params.Title = "Sending Profiles"
 	getTemplate(w, "sending_profiles").ExecuteTemplate(w, "base", params)
+}
+
+// EmailAccounts handles the email accounts page
+func (as *AdminServer) EmailAccounts(w http.ResponseWriter, r *http.Request) {
+	params := newTemplateParams(r)
+	params.Title = "Email Accounts"
+	getTemplate(w, "email_accounts").ExecuteTemplate(w, "base", params)
 }
 
 // Settings handles the changing of settings

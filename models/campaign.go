@@ -24,13 +24,13 @@ type Campaign struct {
 	Template      Template  `json:"template"`
 	PageId        int64     `json:"-"`
 	Page          Page      `json:"page"`
-	Status        string    `json:"status"`
-	Results       []Result  `json:"results,omitempty"`
-	Groups        []Group   `json:"groups,omitempty"`
-	Events        []Event   `json:"timeline,omitempty"`
-	SMTPId        int64     `json:"-"`
-	SMTP          SMTP      `json:"smtp"`
-	URL           string    `json:"url"`
+	Status         string       `json:"status"`
+	Results        []Result     `json:"results,omitempty"`
+	Groups         []Group      `json:"groups,omitempty"`
+	Events         []Event      `json:"timeline,omitempty"`
+	EmailAccountId int64        `json:"-"`
+	EmailAccount   EmailAccount `json:"email_account"`
+	URL            string       `json:"url"`
 }
 
 // CampaignResults is a struct representing the results from a campaign
@@ -107,8 +107,8 @@ var ErrTemplateNotSpecified = errors.New("No email template specified")
 // ErrPageNotSpecified indicates a landing page was not provided for the campaign
 var ErrPageNotSpecified = errors.New("No landing page specified")
 
-// ErrSMTPNotSpecified indicates a sending profile was not provided for the campaign
-var ErrSMTPNotSpecified = errors.New("No sending profile specified")
+// ErrEmailAccountNotSpecified indicates an email account was not provided for the campaign
+var ErrEmailAccountNotSpecified = errors.New("No email account specified")
 
 // ErrTemplateNotFound indicates the template specified does not exist in the database
 var ErrTemplateNotFound = errors.New("Template not found")
@@ -119,8 +119,8 @@ var ErrGroupNotFound = errors.New("Group not found")
 // ErrPageNotFound indicates a page specified by the user does not exist in the database
 var ErrPageNotFound = errors.New("Page not found")
 
-// ErrSMTPNotFound indicates a sending profile specified by the user does not exist in the database
-var ErrSMTPNotFound = errors.New("Sending profile not found")
+// ErrEmailAccountNotFound indicates an email account specified by the user does not exist in the database
+var ErrEmailAccountNotFound = errors.New("Email account not found")
 
 // ErrInvalidSendByDate indicates that the user specified a send by date that occurs before the
 // launch date
@@ -140,8 +140,8 @@ func (c *Campaign) Validate() error {
 		return ErrTemplateNotSpecified
 	case c.Page.Name == "":
 		return ErrPageNotSpecified
-	case c.SMTP.Name == "":
-		return ErrSMTPNotSpecified
+	case c.EmailAccount.Email == "":
+		return ErrEmailAccountNotSpecified
 	case !c.SendByDate.IsZero() && !c.LaunchDate.IsZero() && c.SendByDate.Before(c.LaunchDate):
 		return ErrInvalidSendByDate
 	}
@@ -212,19 +212,14 @@ func (c *Campaign) getDetails() error {
 		c.Page = Page{Name: "[Deleted]"}
 		log.Warnf("%s: page not found for campaign", err)
 	}
-	err = db.Table("smtp").Where("id=?", c.SMTPId).Find(&c.SMTP).Error
+	err = db.Table("email_accounts").Where("id=?", c.EmailAccountId).Find(&c.EmailAccount).Error
 	if err != nil {
-		// Check if the SMTP was deleted
+		// Check if the EmailAccount was deleted
 		if err != gorm.ErrRecordNotFound {
 			return err
 		}
-		c.SMTP = SMTP{Name: "[Deleted]"}
-		log.Warnf("%s: sending profile not found for campaign", err)
-	}
-	err = db.Where("smtp_id=?", c.SMTP.Id).Find(&c.SMTP.Headers).Error
-	if err != nil && err != gorm.ErrRecordNotFound {
-		log.Warn(err)
-		return err
+		c.EmailAccount = EmailAccount{Email: "[Deleted]"}
+		log.Warnf("%s: email account not found for campaign", err)
 	}
 	return nil
 }
@@ -235,10 +230,10 @@ func (c *Campaign) getBaseURL() string {
 	return c.URL
 }
 
-// getFromAddress returns the Campaign's configured SMTP "From" address.
+// getFromAddress returns the Campaign's configured email account address.
 // This is used to implement the TemplateContext interface.
 func (c *Campaign) getFromAddress() string {
-	return c.SMTP.FromAddress
+	return c.EmailAccount.Email
 }
 
 // generateSendDate creates a sendDate
@@ -364,7 +359,7 @@ func GetCampaignSummary(id int64, uid int64) (CampaignSummary, error) {
 
 // GetCampaignMailContext returns a campaign object with just the relevant
 // data needed to generate and send emails. This includes the top-level
-// metadata, the template, and the sending profile.
+// metadata, the template, and the email account.
 //
 // This should only ever be used if you specifically want this lightweight
 // context, since it returns a non-standard campaign object.
@@ -375,12 +370,8 @@ func GetCampaignMailContext(id int64, uid int64) (Campaign, error) {
 	if err != nil {
 		return c, err
 	}
-	err = db.Table("smtp").Where("id=?", c.SMTPId).Find(&c.SMTP).Error
+	err = db.Table("email_accounts").Where("id=?", c.EmailAccountId).Find(&c.EmailAccount).Error
 	if err != nil {
-		return c, err
-	}
-	err = db.Where("smtp_id=?", c.SMTP.Id).Find(&c.SMTP.Headers).Error
-	if err != nil && err != gorm.ErrRecordNotFound {
 		return c, err
 	}
 	err = db.Table("templates").Where("id=?", c.TemplateId).Find(&c.Template).Error
@@ -513,19 +504,23 @@ func PostCampaign(c *Campaign, uid int64) error {
 	}
 	c.Page = p
 	c.PageId = p.Id
-	// Check to make sure the sending profile exists
-	s, err := GetSMTPByName(c.SMTP.Name, uid)
-	if err == gorm.ErrRecordNotFound {
-		log.WithFields(logrus.Fields{
-			"smtp": c.SMTP.Name,
-		}).Error("Sending profile does not exist")
-		return ErrSMTPNotFound
-	} else if err != nil {
-		log.Error(err)
-		return err
+	// Check to make sure the email account exists
+	// Note: Campaigns should reference EmailAccount by ID or Email
+	// For now, we'll look up by email address if EmailAccountId is not set
+	if c.EmailAccountId == 0 && c.EmailAccount.Email != "" {
+		ea, err := GetEmailAccountByEmail(c.EmailAccount.Email)
+		if err == gorm.ErrRecordNotFound {
+			log.WithFields(logrus.Fields{
+				"email": c.EmailAccount.Email,
+			}).Error("Email account does not exist")
+			return ErrEmailAccountNotFound
+		} else if err != nil {
+			log.Error(err)
+			return err
+		}
+		c.EmailAccount = ea
+		c.EmailAccountId = ea.Id
 	}
-	c.SMTP = s
-	c.SMTPId = s.Id
 	// Insert into the DB
 	err = db.Save(c).Error
 	if err != nil {

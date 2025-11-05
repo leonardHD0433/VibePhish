@@ -1210,9 +1210,15 @@ input:focus {
     border-radius: 16px;
     border: none;
     box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
-    max-height: 90vh;
+    max-height: 85vh;
     overflow: hidden;
-    transition: box-shadow 500ms cubic-bezier(0.4, 0, 0.2, 1);
+    transition: max-height 500ms cubic-bezier(0.4, 0, 0.2, 1),
+                box-shadow 500ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Expand height for manual mode */
+.campaign-modal.mode-manual .modal-content {
+    max-height: 95vh;
 }
 
 /* Enhanced shadow during morphing for premium feel */
@@ -1244,10 +1250,16 @@ input:focus {
 }
 
 .campaign-modal .modal-body {
-    max-height: calc(90vh - 180px);
+    max-height: calc(85vh - 180px);
     overflow-y: auto;
     padding: 30px;
     scroll-behavior: smooth;
+    transition: max-height 500ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Expand body height for manual mode */
+.campaign-modal.mode-manual .modal-body {
+    max-height: calc(95vh - 180px);
 }
 
 .campaign-modal .modal-footer {

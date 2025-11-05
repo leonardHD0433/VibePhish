@@ -14,7 +14,6 @@ import (
 type Worker interface {
 	Start()
 	LaunchCampaign(c models.Campaign)
-	SendTestEmail(s *models.EmailRequest) error
 }
 
 // DefaultWorker is the background worker that handles watching for new campaigns and sending emails appropriately.
@@ -145,13 +144,4 @@ func (w *DefaultWorker) LaunchCampaign(c models.Campaign) {
 		mailEntries = append(mailEntries, m)
 	}
 	w.mailer.Queue(mailEntries)
-}
-
-// SendTestEmail sends a test email
-func (w *DefaultWorker) SendTestEmail(s *models.EmailRequest) error {
-	go func() {
-		ms := []mailer.Mail{s}
-		w.mailer.Queue(ms)
-	}()
-	return <-s.ErrorChan
 }

@@ -291,6 +291,52 @@ var api = {
     },
     reset: function () {
         return query("/reset", "POST", {}, true)
+    },
+    // email_accounts contains the endpoints for /email_accounts
+    email_accounts: {
+        // get() - Queries the API for GET /email_accounts
+        get: function () {
+            return query("/email_accounts/", "GET", {}, false)
+        },
+        // post() - Posts an email account to POST /email_accounts
+        post: function (account) {
+            return query("/email_accounts/", "POST", account, false)
+        },
+        // put() - Updates an email account at PUT /email_accounts/:id
+        put: function (account) {
+            return query("/email_accounts/" + account.id, "PUT", account, false)
+        },
+        // delete() - Deletes an email account at DELETE /email_accounts/:id
+        delete: function (id) {
+            return query("/email_accounts/" + id, "DELETE", {}, false)
+        },
+        // getByType() - Queries the API for GET /email_accounts/type/:type
+        getByType: function (type) {
+            return query("/email_accounts/type/" + type, "GET", {}, false)
+        }
+    },
+    // email_types contains the endpoints for /email_types
+    email_types: {
+        // get() - Queries the API for GET /email_types (active types only)
+        get: function () {
+            return query("/email_types/", "GET", {}, false)
+        },
+        // getAll() - Queries the API for GET /email_types/all (including inactive)
+        getAll: function () {
+            return query("/email_types/all", "GET", {}, false)
+        },
+        // post() - Posts an email type to POST /email_types
+        post: function (type) {
+            return query("/email_types/", "POST", type, false)
+        },
+        // put() - Updates an email type at PUT /email_types/:id
+        put: function (type) {
+            return query("/email_types/" + type.id, "PUT", type, false)
+        },
+        // delete() - Deletes an email type at DELETE /email_types/:id
+        delete: function (id) {
+            return query("/email_types/" + id, "DELETE", {}, false)
+        }
     }
 }
 window.api = api

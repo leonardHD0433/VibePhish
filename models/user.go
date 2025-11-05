@@ -232,7 +232,7 @@ func DeleteUser(id int64) error {
 // If no user is found, an error is thrown.
 func GetUserByOAuthID(provider, oauthID string) (User, error) {
 	u := User{}
-	err := db.Where("oauth_provider = ? AND oauth_id = ?", provider, oauthID).First(&u).Error
+	err := db.Preload("Role").Where("oauth_provider = ? AND oauth_id = ?", provider, oauthID).First(&u).Error
 	return u, err
 }
 

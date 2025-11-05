@@ -46,9 +46,7 @@ function launch() {
                     page: {
                         name: $("#page").select2("data")[0].text
                     },
-                    smtp: {
-                        name: $("#profile").select2("data")[0].text
-                    },
+                    email_type: $("#profile").val(),
                     launch_date: moment($("#launch_date").val(), "MMMM Do YYYY, h:mm a").utc().format(),
                     send_by_date: send_by_date || null,
                     groups: groups,
@@ -82,26 +80,71 @@ function launch() {
 
 // Attempts to send a test email by POSTing to /campaigns/
 function sendTestEmail() {
-    var test_email_request = {
-        template: {
-            name: $("#template").select2("data")[0].text
-        },
-        first_name: $("input[name=to_first_name]").val(),
-        last_name: $("input[name=to_last_name]").val(),
-        email: $("input[name=to_email]").val(),
-        position: $("input[name=to_position]").val(),
-        url: $("#url").val(),
-        page: {
-            name: $("#page").select2("data")[0].text
-        },
-        smtp: {
-            name: $("#profile").select2("data")[0].text
+    try {
+        console.log("sendTestEmail() called")
+
+        // Clear any previous error messages
+        $("#sendTestEmailModal\\.flashes").empty()
+
+        // Check if email type is selected
+        var emailType = $("#profile").val()
+        console.log("Email type:", emailType)
+
+        if (!emailType || emailType === "") {
+            console.log("No email type selected")
+            $("#sendTestEmailModal\\.flashes").append("<div style=\"text-align:center\" class=\"alert alert-danger\">\
+                <i class=\"fa fa-exclamation-circle\"></i> Please select an email type</div>")
+            return
         }
-    }
-    btnHtml = $("#sendTestModalSubmit").html()
-    $("#sendTestModalSubmit").html('<i class="fa fa-spinner fa-spin"></i> Sending')
-    // Send the test email
-    api.send_test_email(test_email_request)
+
+        // Get template name - use empty string if not selected (backend will use default)
+        var templateName = ""
+        try {
+            var templateData = $("#template").select2("data")
+            if (templateData && templateData.length > 0) {
+                templateName = templateData[0].text
+            }
+        } catch (e) {
+            console.log("Could not get template from select2, using empty string (will use default)")
+        }
+        console.log("Template name:", templateName)
+
+        // Get page name - use empty string if not selected
+        var pageName = ""
+        try {
+            var pageData = $("#page").select2("data")
+            if (pageData && pageData.length > 0) {
+                pageName = pageData[0].text
+            }
+        } catch (e) {
+            console.log("Could not get page from select2, using empty string")
+        }
+        console.log("Page name:", pageName)
+
+        var test_email_request = {
+            template: {
+                name: templateName
+            },
+            first_name: $("input[name=to_first_name]").val(),
+            last_name: $("input[name=to_last_name]").val(),
+            email: $("input[name=to_email]").val(),
+            position: $("input[name=to_position]").val(),
+            url: $("#url").val(),
+            page: {
+                name: pageName
+            },
+            email_type: emailType
+        }
+
+        console.log("Test email request:", test_email_request)
+
+        btnHtml = $("#sendTestModalSubmit").html()
+        $("#sendTestModalSubmit").html('<i class="fa fa-spinner fa-spin"></i> Sending')
+
+        console.log("Calling api.send_test_email()")
+
+        // Send the test email
+        api.send_test_email(test_email_request)
         .success(function (data) {
             $("#sendTestEmailModal\\.flashes").empty().append("<div style=\"text-align:center\" class=\"alert alert-success\">\
             <i class=\"fa fa-check-circle\"></i> Email Sent!</div>")
@@ -112,6 +155,14 @@ function sendTestEmail() {
             <i class=\"fa fa-exclamation-circle\"></i> " + data.responseJSON.message + "</div>")
             $("#sendTestModalSubmit").html(btnHtml)
         })
+    } catch (error) {
+        console.error("Error in sendTestEmail():", error)
+        $("#sendTestEmailModal\\.flashes").empty().append("<div style=\"text-align:center\" class=\"alert alert-danger\">\
+            <i class=\"fa fa-exclamation-circle\"></i> Error: " + error.message + "</div>")
+        if (typeof btnHtml !== 'undefined') {
+            $("#sendTestModalSubmit").html(btnHtml)
+        }
+    }
 }
 
 function dismiss() {
@@ -165,20 +216,21 @@ function setupOptions() {
     api.groups.summary()
         .success(function (summaries) {
             groups = summaries.groups
+            var group_s2 = $.map(groups, function (obj) {
+                obj.text = obj.name
+                obj.title = obj.num_targets + " targets"
+                return obj
+            });
+
+            // Always initialize Select2 to prevent large multi-select box
+            $("#users.form-control").select2({
+                placeholder: "Select Groups",
+                data: group_s2,
+            });
+
             if (groups.length == 0) {
                 modalError("No groups found!")
                 return false;
-            } else {
-                var group_s2 = $.map(groups, function (obj) {
-                    obj.text = obj.name
-                    obj.title = obj.num_targets + " targets"
-                    return obj
-                });
-                console.log(group_s2)
-                $("#users.form-control").select2({
-                    placeholder: "Select Groups",
-                    data: group_s2,
-                });
             }
         });
     api.templates.get()
@@ -223,25 +275,25 @@ function setupOptions() {
                 }
             }
         });
-    api.SMTP.get()
-        .success(function (profiles) {
-            if (profiles.length == 0) {
-                modalError("No profiles found!")
+    api.email_types.get()
+        .success(function (types) {
+            if (types.length == 0) {
+                modalError("No email types found!")
                 return false
             } else {
-                var profile_s2 = $.map(profiles, function (obj) {
-                    obj.text = obj.name
+                var profile_s2 = $.map(types, function (obj) {
+                    obj.text = obj.display_name
+                    obj.id = obj.value
                     return obj
                 });
-                var profile_select = $("#profile.form-control")
+                var profile_select = $("#profile")
                 profile_select.select2({
-                    placeholder: "Select a Sending Profile",
+                    placeholder: "Select an Email Type",
                     data: profile_s2,
-                }).select2("val", profile_s2[0]);
-                if (profiles.length === 1) {
-                    profile_select.val(profile_s2[0].id)
-                    profile_select.trigger('change.select2')
-                }
+                    dropdownParent: $('#modal')
+                });
+                // Set default value to first email type
+                profile_select.val(profile_s2[0].id).trigger('change');
             }
         });
 }
@@ -274,13 +326,8 @@ function copy(idx) {
                 $("#page").val(campaign.page.id.toString());
                 $("#page").trigger("change.select2")
             }
-            if (!campaign.smtp.id) {
-                $("#profile").val("").change();
-                $("#profile").select2({
-                    placeholder: campaign.smtp.name
-                });
-            } else {
-                $("#profile").val(campaign.smtp.id.toString());
+            if (campaign.email_type) {
+                $("#profile").val(campaign.email_type);
                 $("#profile").trigger("change.select2")
             }
             $("#url").val(campaign.url)
@@ -584,6 +631,11 @@ $(document).ready(function () {
 
     // Initialize modal dialog with copilot mode class (without animation)
     $('#modal .modal-dialog').addClass('mode-copilot');
+
+    // Clear error messages when Send Test Email modal is closed
+    $('#sendTestEmailModal').on('hidden.bs.modal', function () {
+        $("#sendTestEmailModal\\.flashes").empty()
+    });
 
     // Initialize in copilot mode
     switchCampaignMode('copilot');
