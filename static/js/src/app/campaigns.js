@@ -13,6 +13,72 @@ var campaign = {}
 
 // Launch attempts to POST to /campaigns/
 function launch() {
+    // Validate fields BEFORE showing confirmation dialog
+    var errorMessage = "";
+
+    var name = $("#name").val();
+    var template = $("#template").val();
+    var page = $("#page").val();
+    var profile = $("#profile").val();
+    var users = $("#users").val();
+    var launchDate = $("#launch_date").val();
+    var sendByDate = $("#send_by_date").val();
+
+    // console.log("Validation - name:", name);
+    // console.log("Validation - template:", template);
+    // console.log("Validation - page:", page);
+    // console.log("Validation - profile:", profile);
+    // console.log("Validation - users:", users);
+    // console.log("Validation - launchDate:", launchDate);
+    // console.log("Validation - sendByDate:", sendByDate);
+
+    if (!name || name.trim() === "") {
+        errorMessage = "Campaign name is required";
+    } else if (!template || template === "") {
+        errorMessage = "Email template is required";
+    } else if (!page || page === "") {
+        errorMessage = "Landing page is required";
+    } else if (!profile || profile === "") {
+        errorMessage = "Email type is required";
+    } else if (!users || users.length === 0) {
+        errorMessage = "At least one group is required";
+    } else if (!launchDate || launchDate.trim() === "") {
+        errorMessage = "Launch date is required";
+    } else {
+        // Validate launch_date is not in the past
+        var launchMoment = moment(launchDate, "MMMM Do YYYY, h:mm a");
+        var now = moment();
+
+        if (launchMoment.isBefore(now)) {
+            errorMessage = "Launch date cannot be in the past";
+        } else if (sendByDate && sendByDate.trim() !== "") {
+            // Validate send_by_date is after launch_date
+            var sendByMoment = moment(sendByDate, "MMMM Do YYYY, h:mm a");
+
+            // console.log("Launch date parsed:", launchMoment.format());
+            // console.log("Send by date parsed:", sendByMoment.format());
+
+            if (sendByMoment.isBefore(launchMoment)) {
+                errorMessage = "The launch date must be before the \"send emails by\" date";
+            }
+        }
+    }
+
+    // If validation fails, show error and return
+    if (errorMessage) {
+        // console.log("Validation failed:", errorMessage);
+        Swal.fire({
+            title: "Validation Error",
+            text: errorMessage,
+            type: "error",
+            confirmButtonColor: "#428bca"
+        });
+        return;
+    }
+
+    // console.log("Validation passed, showing confirmation");
+
+    // All validation passed, show confirmation dialog
     Swal.fire({
         title: "Are you sure?",
         text: "This will schedule the campaign to be launched.",
@@ -21,60 +87,141 @@ function launch() {
         showCancelButton: true,
         confirmButtonText: "Launch",
         confirmButtonColor: "#428bca",
-        reverseButtons: true,
-        allowOutsideClick: false,
-        showLoaderOnConfirm: true,
-        preConfirm: function () {
-            return new Promise(function (resolve, reject) {
-                groups = []
-                $("#users").select2("data").forEach(function (group) {
-                    groups.push({
-                        name: group.text
-                    });
-                })
-                // Validate our fields
-                var send_by_date = $("#send_by_date").val()
-                if (send_by_date != "") {
-                    send_by_date = moment(send_by_date, "MMMM Do YYYY, h:mm a").utc().format()
-                }
-                campaign = {
-                    name: $("#name").val(),
-                    template: {
-                        name: $("#template").select2("data")[0].text
-                    },
-                    url: $("#url").val(),
-                    page: {
-                        name: $("#page").select2("data")[0].text
-                    },
-                    email_type: $("#profile").val(),
-                    launch_date: moment($("#launch_date").val(), "MMMM Do YYYY, h:mm a").utc().format(),
-                    send_by_date: send_by_date || null,
-                    groups: groups,
-                }
-                // Submit the campaign
-                api.campaigns.post(campaign)
-                    .success(function (data) {
-                        resolve()
-                        campaign = data
-                    })
-                    .error(function (data) {
-                        $("#modal\\.flashes").empty().append("<div style=\"text-align:center\" class=\"alert alert-danger\">\
-            <i class=\"fa fa-exclamation-circle\"></i> " + data.responseJSON.message + "</div>")
-                        Swal.close()
-                    })
-            })
-        }
+        reverseButtons: true
     }).then(function (result) {
-        if (result.value){
-            Swal.fire(
-                'Campaign Scheduled!',
-                'This campaign has been scheduled for launch!',
-                'success'
-            );
+        if (result.value) {
+            // Flag to track if user dismissed the dialog
+            var userDismissed = false;
+            var timeoutId = null;
+
+            // Show loading dialog
+            Swal.fire({
+                title: 'Launching Campaign...',
+                html: '<div style="text-align: center;"><i class="fa fa-spinner fa-spin fa-3x"></i><br><br>Please wait while we schedule your campaign...</div>',
+                allowOutsideClick: true,
+                allowEscapeKey: true,
+                allowEnterKey: false,
+                showConfirmButton: false,
+                showCancelButton: true,
+                cancelButtonText: 'Cancel',
+                cancelButtonColor: '#d33',
+                onClose: function() {
+                    // User closed the dialog - set flag and clear timeout
+                    userDismissed = true;
+                    if (timeoutId) {
+                        clearTimeout(timeoutId);
+                    }
+                }
+            });
+
+            // Build campaign data
+            groups = []
+            $("#users").select2("data").forEach(function (group) {
+                groups.push({
+                    name: group.text
+                });
+            })
+
+            var send_by_date = $("#send_by_date").val()
+            if (send_by_date != "") {
+                send_by_date = moment(send_by_date, "MMMM Do YYYY, h:mm a").utc().format()
+            }
+
+            campaign = {
+                name: $("#name").val(),
+                template: {
+                    name: $("#template").select2("data")[0].text
+                },
+                url: $("#url").val(),
+                page: {
+                    name: $("#page").select2("data")[0].text
+                },
+                email_type: $("#profile").val(),
+                launch_date: moment($("#launch_date").val(), "MMMM Do YYYY, h:mm a").utc().format(),
+                send_by_date: send_by_date || null,
+                groups: groups,
+            }
+
+            // Set up timeout (20 seconds)
+            timeoutId = setTimeout(function() {
+                if (!userDismissed) {
+                    userDismissed = true;
+                    Swal.fire({
+                        title: "Request Timed Out",
+                        text: "The campaign launch is taking longer than expected. Please check if the email service is running and try again.",
+                        type: "error",
+                        confirmButtonColor: "#428bca"
+                    });
+                }
+            }, 20000);
+
+            // Submit the campaign
+            api.campaigns.post(campaign)
+                .success(function (data) {
+                    if (timeoutId) {
+                        clearTimeout(timeoutId);
+                    }
+                    // Only show success if user hasn't dismissed
+                    if (!userDismissed) {
+                        campaign = data;
+                        Swal.fire(
+                            'Campaign Scheduled!',
+                            'This campaign has been scheduled for launch!',
+                            'success'
+                        ).then(function() {
+                            window.location = "/campaigns/" + campaign.id.toString()
+                        });
+                    }
+                })
+                .error(function (data) {
+                    if (timeoutId) {
+                        clearTimeout(timeoutId);
+                    }
+
+                    // Only show error if user hasn't dismissed
+                    if (!userDismissed) {
+                        // Enhanced error message extraction
+                        var errorMessage = "An error occurred while launching the campaign";
+
+                        // Try to extract error message from various response formats
+                        if (data.responseJSON) {
+                            if (data.responseJSON.message) {
+                                errorMessage = data.responseJSON.message;
+                            } else if (data.responseJSON.error) {
+                                errorMessage = data.responseJSON.error;
+                            } else if (typeof data.responseJSON === 'string') {
+                                errorMessage = data.responseJSON;
+                            }
+                        } else if (data.responseText) {
+                            try {
+                                var errorData = JSON.parse(data.responseText);
+                                errorMessage = errorData.message || errorData.error || errorMessage;
+                            } catch (e) {
+                                // If JSON parsing fails, use the raw text if it's not too long
+                                if (data.responseText.length < 200) {
+                                    errorMessage = data.responseText;
+                                } else if (data.statusText) {
+                                    errorMessage = data.statusText;
+                                }
+                            }
+                        } else if (data.statusText) {
+                            errorMessage = data.statusText;
+                        }
+
+                        // Add HTTP status code to error message for debugging
+                        if (data.status) {
+                            errorMessage = "[HTTP " + data.status + "] " + errorMessage;
+                        }
+
+                        Swal.fire({
+                            title: "Launch Failed",
+                            text: errorMessage,
+                            type: "error",
+                            confirmButtonColor: "#428bca"
+                        });
+                    }
+                })
         }
-        $('button:contains("OK")').on('click', function () {
-            window.location = "/campaigns/" + campaign.id.toString()
-        })
     })
 }
 

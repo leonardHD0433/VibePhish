@@ -141,8 +141,8 @@ func (m *MailLog) GetDialer() (mailer.Dialer, error) {
 		}
 		c = &campaign
 	}
-	// Use n8n webhook dialer via EmailAccount
-	return c.EmailAccount.GetN8NDialer()
+	// Use n8n webhook dialer via EmailAccount with campaign context
+	return c.EmailAccount.GetN8NDialer(c)
 }
 
 // CacheCampaign allows bulk-mail workers to cache the otherwise expensive

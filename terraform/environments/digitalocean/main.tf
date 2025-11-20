@@ -121,6 +121,12 @@ resource "digitalocean_database_firewall" "postgres" {
     value = digitalocean_app.fyphish.id
   }
 
+  # Allow entire VPC CIDR range (10.10.0.0/16) - any resource in VPC can connect
+  rule {
+    type  = "ip_addr"
+    value = digitalocean_vpc.main.ip_range
+  }
+
   # Allow from local development machine (when admin_ip_address is set)
   dynamic "rule" {
     for_each = var.admin_ip_address != "" ? [1] : []

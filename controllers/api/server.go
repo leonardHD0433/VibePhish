@@ -55,6 +55,12 @@ func WithLimiter(limiter *ratelimit.PostLimiter) ServerOption {
 func (as *Server) registerRoutes() {
 	root := mux.NewRouter()
 	root = root.StrictSlash(true)
+
+	// n8n callback endpoint (JWT authenticated, called by n8n after email send)
+	// Must be registered on root router BEFORE /api/ subrouter to bypass RequireAPIKey middleware
+	// Note: Full path /api/webhooks/n8n/status because admin server uses .Handler() not .Subrouter()
+	root.HandleFunc("/api/webhooks/n8n/status", mid.RequireN8NJWT(as.N8NEmailCallback))
+
 	router := root.PathPrefix("/api/").Subrouter()
 	router.Use(mid.RequireAPIKey)
 	router.Use(mid.EnforceViewOnly)
@@ -105,7 +111,8 @@ func (as *Server) registerRoutes() {
 	router.HandleFunc("/email_types/all", mid.Use(as.EmailTypesAll, mid.RequirePermission(models.PermissionModifySystem)))
 	router.HandleFunc("/email_types/{id:[0-9]+}", mid.Use(as.EmailType, mid.RequirePermission(models.PermissionModifySystem)))
 
-	as.handler = router
+	// Use root router as handler to include both root routes (n8n callback) and subrouter routes (API endpoints)
+	as.handler = root
 }
 
 func (as *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {

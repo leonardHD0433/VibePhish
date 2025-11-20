@@ -2,6 +2,7 @@ package models
 
 import (
 	"errors"
+	"fmt"
 	"net/url"
 	"time"
 
@@ -30,6 +31,7 @@ type Campaign struct {
 	Events         []Event      `json:"timeline,omitempty"`
 	EmailAccountId int64        `json:"-"`
 	EmailAccount   EmailAccount `json:"email_account"`
+	EmailType      string       `json:"email_type" gorm:"-"` // Transient field for frontend, not stored in DB
 	URL            string       `json:"url"`
 }
 
@@ -441,6 +443,22 @@ func GetQueuedCampaigns(t time.Time) ([]Campaign, error) {
 
 // PostCampaign inserts a campaign and all associated records into the database.
 func PostCampaign(c *Campaign, uid int64) error {
+	// If EmailType is provided, look up the EmailAccount before validation
+	if c.EmailType != "" && c.EmailAccount.Email == "" {
+		ea, err := GetEmailAccountByType(c.EmailType)
+		if err == gorm.ErrRecordNotFound {
+			log.WithFields(logrus.Fields{
+				"email_type": c.EmailType,
+			}).Error("Email account with this type does not exist")
+			return errors.New("Email account not found for type: " + c.EmailType)
+		} else if err != nil {
+			log.Error(err)
+			return err
+		}
+		c.EmailAccount = ea
+		c.EmailAccountId = ea.Id
+	}
+
 	err := c.Validate()
 	if err != nil {
 		return err
@@ -505,9 +523,9 @@ func PostCampaign(c *Campaign, uid int64) error {
 	c.Page = p
 	c.PageId = p.Id
 	// Check to make sure the email account exists
-	// Note: Campaigns should reference EmailAccount by ID or Email
-	// For now, we'll look up by email address if EmailAccountId is not set
+	// Note: Campaigns should reference EmailAccount by ID, Email, or EmailType
 	if c.EmailAccountId == 0 && c.EmailAccount.Email != "" {
+		// Look up by email address
 		ea, err := GetEmailAccountByEmail(c.EmailAccount.Email)
 		if err == gorm.ErrRecordNotFound {
 			log.WithFields(logrus.Fields{
@@ -520,21 +538,48 @@ func PostCampaign(c *Campaign, uid int64) error {
 		}
 		c.EmailAccount = ea
 		c.EmailAccountId = ea.Id
+	} else if c.EmailAccountId == 0 && c.EmailType != "" {
+		// Look up by email type (for n8n integration)
+		ea, err := GetEmailAccountByType(c.EmailType)
+		if err == gorm.ErrRecordNotFound {
+			log.WithFields(logrus.Fields{
+				"email_type": c.EmailType,
+			}).Error("Email account with this type does not exist")
+			return ErrEmailAccountNotFound
+		} else if err != nil {
+			log.Error(err)
+			return err
+		}
+		c.EmailAccount = ea
+		c.EmailAccountId = ea.Id
 	}
-	// Insert into the DB
-	err = db.Save(c).Error
+	// Start transaction BEFORE saving campaign to ensure atomicity
+	// If any error occurs during campaign/results creation, everything will be rolled back
+	tx := db.Begin()
+
+	// Insert campaign into the DB (using transaction)
+	err = tx.Save(c).Error
 	if err != nil {
 		log.Error(err)
+		tx.Rollback()
 		return err
 	}
-	err = AddEvent(&Event{Message: "Campaign Created"}, c.Id)
+
+	// Add "Campaign Created" event in the same transaction
+	event := &Event{Message: "Campaign Created"}
+	event.CampaignId = c.Id
+	event.Time = time.Now().UTC()
+
+	// Save event in transaction (don't fail entire operation if event save fails)
+	err = tx.Save(event).Error
 	if err != nil {
 		log.Error(err)
+		// Continue despite event save failure - this is non-critical
 	}
-	// Insert all the results
+
+	// Insert all the results (in same transaction)
 	resultMap := make(map[string]bool)
 	recipientIndex := 0
-	tx := db.Begin()
 	for _, g := range c.Groups {
 		// Insert a result for each target in the group
 		for _, t := range g.Targets {
@@ -579,29 +624,67 @@ func PostCampaign(c *Campaign, uid int64) error {
 				return err
 			}
 			c.Results = append(c.Results, *r)
-			log.WithFields(logrus.Fields{
-				"email":     r.Email,
-				"send_date": sendDate,
-			}).Debug("creating maillog")
-			m := &MailLog{
-				UserId:     c.UserId,
-				CampaignId: c.Id,
-				RId:        r.RId,
-				SendDate:   sendDate,
-				Processing: processing,
-			}
-			err = tx.Save(m).Error
-			if err != nil {
+
+			// Skip maillog creation for n8n campaigns (true batch sending)
+			// n8n will handle scheduling via Wait nodes and send callbacks
+			if !ShouldUseN8NBatchLaunch(c) {
 				log.WithFields(logrus.Fields{
-					"email": t.Email,
-				}).Errorf("error creating maillog entry: %v", err)
-				tx.Rollback()
-				return err
+					"email":     r.Email,
+					"send_date": sendDate,
+				}).Debug("creating maillog")
+				m := &MailLog{
+					UserId:     c.UserId,
+					CampaignId: c.Id,
+					RId:        r.RId,
+					SendDate:   sendDate,
+					Processing: processing,
+				}
+				err = tx.Save(m).Error
+				if err != nil {
+					log.WithFields(logrus.Fields{
+						"email": t.Email,
+					}).Errorf("error creating maillog entry: %v", err)
+					tx.Rollback()
+					return err
+				}
 			}
 			recipientIndex++
 		}
 	}
-	return tx.Commit().Error
+
+	// For n8n campaigns, launch the webhook BEFORE committing transaction
+	// This ensures atomicity - if n8n fails, campaign is not created
+	if ShouldUseN8NBatchLaunch(c) {
+		log.Infof("Launching n8n batch campaign %d (before commit)", c.Id)
+		err = LaunchN8NBatchCampaign(c)
+		if err != nil {
+			log.Errorf("Failed to launch n8n batch campaign %d: %v", c.Id, err)
+			tx.Rollback() // Rollback everything if n8n webhook fails
+			return fmt.Errorf("n8n webhook failed: %v", err)
+		}
+	}
+
+	// Commit the transaction (only reached if n8n succeeded or not needed)
+	err = tx.Commit().Error
+	if err != nil {
+		return err
+	}
+
+	// Send webhooks AFTER transaction commits (non-blocking, best-effort)
+	// This avoids database deadlock from querying inside transaction
+	whs, err := GetActiveWebhooks()
+	if err == nil && len(whs) > 0 {
+		whEndPoints := []webhook.EndPoint{}
+		for _, wh := range whs {
+			whEndPoints = append(whEndPoints, webhook.EndPoint{
+				URL:    wh.URL,
+				Secret: wh.Secret,
+			})
+		}
+		webhook.SendAll(whEndPoints, event)
+	}
+
+	return nil
 }
 
 // DeleteCampaign deletes the specified campaign

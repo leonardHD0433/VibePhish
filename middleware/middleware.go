@@ -15,7 +15,7 @@ import (
 // CSRFExemptPrefixes are a list of routes that are exempt from CSRF protection
 var CSRFExemptPrefixes = []string{
 	"/auth/microsoft/callback",
-	"/api/", // API routes use Bearer token authentication, not CSRF tokens
+	"/api/", // API routes use Bearer token authentication, not CSRF tokens (includes n8n callback)
 }
 
 // CSRFExceptions is a middleware that prevents CSRF checks on routes listed in

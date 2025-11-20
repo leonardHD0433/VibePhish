@@ -31,7 +31,8 @@ gophish.db*
 gophish
 fyphish
 .env
-.env.docker
+.env.*
+!.env.example
 *.secret
 config-test.json
 .iteration

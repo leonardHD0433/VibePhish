@@ -2,6 +2,7 @@ package models
 
 import (
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
@@ -9,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -23,15 +25,27 @@ type N8NSender struct {
 	webhookURL string
 	jwtSecret  string
 	emailType  string
+	campaign   *Campaign
 	client     *http.Client
 }
 
 // N8NWebhookPayload represents the payload sent to n8n webhook
 type N8NWebhookPayload struct {
-	EmailType  string   `json:"email_type"`
-	Recipients []string `json:"recipients"` // Array of recipients for batch sending
-	Subject    string   `json:"subject"`
-	Message    string   `json:"message"`
+	EmailType       string                `json:"email_type"`
+	CampaignId      int64                 `json:"campaign_id"`
+	LaunchDate      time.Time             `json:"launch_date"`
+	SendByDate      time.Time             `json:"send_by_date"`
+	TotalRecipients int                   `json:"total_recipients"`
+	Recipients      []RecipientWithTiming `json:"recipients"` // Enhanced with tracking info
+	Subject         string                `json:"subject"`
+	Message         string                `json:"message"`
+}
+
+// RecipientWithTiming contains recipient email, result ID, and calculated send time
+type RecipientWithTiming struct {
+	Email  string    `json:"email"`
+	RId    string    `json:"rid"`     // Result ID for tracking in Gophish
+	SendAt time.Time `json:"send_at"` // Pre-calculated send time
 }
 
 // N8NDialer implements the mailer.Dialer interface for n8n webhook
@@ -39,6 +53,7 @@ type N8NDialer struct {
 	webhookURL string
 	jwtSecret  string
 	emailType  string
+	campaign   *Campaign
 }
 
 // Dial creates a new N8NSender
@@ -53,12 +68,25 @@ func (d *N8NDialer) Dial() (mailer.Sender, error) {
 		return nil, errors.New("email type not specified in Email Profile")
 	}
 
+	// Create custom transport with DNS and connection timeouts
+	transport := &http.Transport{
+		DialContext: (&net.Dialer{
+			Timeout:   2 * time.Second, // DNS resolution + connection timeout
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		TLSHandshakeTimeout:   2 * time.Second,
+		ResponseHeaderTimeout: 3 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
+
 	return &N8NSender{
 		webhookURL: d.webhookURL,
 		jwtSecret:  d.jwtSecret,
 		emailType:  d.emailType,
+		campaign:   d.campaign,
 		client: &http.Client{
-			Timeout: 30 * time.Second,
+			Timeout:   5 * time.Second, // Overall timeout (DNS + connection + response)
+			Transport: transport,
 		},
 	}, nil
 }
@@ -67,6 +95,10 @@ func (d *N8NDialer) Dial() (mailer.Sender, error) {
 func (s *N8NSender) Send(from string, to []string, msg io.WriterTo) error {
 	if len(to) == 0 {
 		return errors.New("no recipients specified")
+	}
+
+	if s.campaign == nil {
+		return errors.New("campaign context not available")
 	}
 
 	// Parse the message to extract subject and body
@@ -82,21 +114,59 @@ func (s *N8NSender) Send(from string, to []string, msg io.WriterTo) error {
 		return fmt.Errorf("failed to parse message: %v", err)
 	}
 
-	// Send to all recipients in a single webhook call
+	// Build recipients with tracking information and calculated send times
+	recipientsWithTiming := make([]RecipientWithTiming, 0, len(to))
+	totalRecipients := len(to)
+
+	for idx, email := range to {
+		// Look up Result from campaign's in-memory results (CRITICAL: don't query database during transaction!)
+		var result *Result
+		for i := range s.campaign.Results {
+			if s.campaign.Results[i].Email == email {
+				result = &s.campaign.Results[i]
+				break
+			}
+		}
+
+		if result == nil {
+			log.Warnf("Failed to find result for %s in campaign results, skipping", email)
+			continue
+		}
+
+		// Calculate send time using campaign's timing logic
+		sendAt := s.campaign.generateSendDate(idx, totalRecipients)
+
+		recipientsWithTiming = append(recipientsWithTiming, RecipientWithTiming{
+			Email:  email,
+			RId:    result.RId,
+			SendAt: sendAt,
+		})
+	}
+
+	if len(recipientsWithTiming) == 0 {
+		return errors.New("no valid recipients found with results")
+	}
+
+	// Build enhanced payload with campaign context
 	payload := N8NWebhookPayload{
-		EmailType:  s.emailType,
-		Recipients: to, // Send entire recipients array
-		Subject:    subject,
-		Message:    htmlBody,
+		EmailType:       s.emailType,
+		CampaignId:      s.campaign.Id,
+		LaunchDate:      s.campaign.LaunchDate,
+		SendByDate:      s.campaign.SendByDate,
+		TotalRecipients: len(recipientsWithTiming),
+		Recipients:      recipientsWithTiming,
+		Subject:         subject,
+		Message:         htmlBody,
 	}
 
 	err = s.sendToN8N(payload)
 	if err != nil {
-		log.Errorf("Failed to send email via n8n to %d recipients: %v", len(to), err)
+		log.Errorf("Failed to send email via n8n to %d recipients: %v", len(recipientsWithTiming), err)
 		return err
 	}
 
-	log.Infof("Successfully sent email via n8n to %d recipients (type: %s)", len(to), s.emailType)
+	log.Infof("Successfully sent email batch via n8n to %d recipients (campaign: %d, type: %s)",
+		len(recipientsWithTiming), s.campaign.Id, s.emailType)
 	return nil
 }
 
@@ -116,8 +186,12 @@ func (s *N8NSender) sendToN8N(payload N8NWebhookPayload) error {
 
 	log.Debugf("Sending to n8n webhook: %s", string(payloadBytes))
 
-	// Create HTTP request
-	req, err := http.NewRequest("POST", s.webhookURL, bytes.NewBuffer(payloadBytes))
+	// Create context with absolute 3-second deadline
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	// Create HTTP request with context
+	req, err := http.NewRequestWithContext(ctx, "POST", s.webhookURL, bytes.NewBuffer(payloadBytes))
 	if err != nil {
 		return fmt.Errorf("failed to create request: %v", err)
 	}
@@ -126,7 +200,7 @@ func (s *N8NSender) sendToN8N(payload N8NWebhookPayload) error {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)
 
-	// Send request
+	// Send request (will be cancelled after 3 seconds no matter what)
 	resp, err := s.client.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to send request: %v", err)
@@ -277,8 +351,8 @@ func (s *N8NSender) Reset() error {
 	return nil
 }
 
-// GetN8NDialer creates a new N8NDialer for the given Email Account
-func (ea *EmailAccount) GetN8NDialer() (mailer.Dialer, error) {
+// GetN8NDialer creates a new N8NDialer for the given Email Account with campaign context
+func (ea *EmailAccount) GetN8NDialer(campaign *Campaign) (mailer.Dialer, error) {
 	// Get n8n configuration from environment
 	webhookURL := os.Getenv("N8N_SEND_EMAIL")
 	if webhookURL == "" {
@@ -298,5 +372,6 @@ func (ea *EmailAccount) GetN8NDialer() (mailer.Dialer, error) {
 		webhookURL: webhookURL,
 		jwtSecret:  jwtSecret,
 		emailType:  ea.EmailType,
+		campaign:   campaign,
 	}, nil
 }
