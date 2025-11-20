@@ -359,6 +359,13 @@ function deleteCampaign(idx) {
     })
 }
 
+// Set launch date to current time + 5 minutes (for manual/n8n sending mode)
+function setLaunchDateToNowPlusFiveMinutes() {
+    var launchDate = moment().add(5, 'minutes');
+    $("#launch_date").data("DateTimePicker").date(launchDate);
+    console.log("Auto-set launch date to:", launchDate.format("MMMM Do YYYY, h:mm a"));
+}
+
 function setupOptions() {
     api.groups.summary()
         .success(function (summaries) {
@@ -441,6 +448,14 @@ function setupOptions() {
                 });
                 // Set default value to first email type
                 profile_select.val(profile_s2[0].id).trigger('change');
+
+                // Auto-update launch date when email type changes
+                profile_select.on('change', function() {
+                    setLaunchDateToNowPlusFiveMinutes();
+                });
+
+                // Auto-set launch date to now + 5 minutes when modal opens
+                setLaunchDateToNowPlusFiveMinutes();
             }
         });
 }

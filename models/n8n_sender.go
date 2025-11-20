@@ -33,19 +33,25 @@ type N8NSender struct {
 type N8NWebhookPayload struct {
 	EmailType       string                `json:"email_type"`
 	CampaignId      int64                 `json:"campaign_id"`
+	CampaignURL     string                `json:"campaign_url"`     // Base URL for constructing tracking links
 	LaunchDate      time.Time             `json:"launch_date"`
 	SendByDate      time.Time             `json:"send_by_date"`
 	TotalRecipients int                   `json:"total_recipients"`
 	Recipients      []RecipientWithTiming `json:"recipients"` // Enhanced with tracking info
 	Subject         string                `json:"subject"`
-	Message         string                `json:"message"`
+	Message         string                `json:"message"` // Raw template with {{.FirstName}}, {{.Email}}, {{.URL}} placeholders
 }
 
-// RecipientWithTiming contains recipient email, result ID, and calculated send time
+// RecipientWithTiming contains recipient email, result ID, calculated send time, and personalization data
 type RecipientWithTiming struct {
-	Email  string    `json:"email"`
-	RId    string    `json:"rid"`     // Result ID for tracking in Gophish
-	SendAt time.Time `json:"send_at"` // Pre-calculated send time
+	Email       string    `json:"email"`
+	FirstName   string    `json:"first_name"`   // For {{.FirstName}} template placeholder
+	LastName    string    `json:"last_name"`    // For {{.LastName}} template placeholder
+	Position    string    `json:"position"`     // For {{.Position}} template placeholder
+	RId         string    `json:"rid"`          // Result ID for tracking in Gophish
+	SendAt      time.Time `json:"send_at"`      // Pre-calculated send time
+	PhishingURL string    `json:"phishing_url"` // Phishing landing page URL for {{.URL}} placeholder (click tracking)
+	TrackingURL string    `json:"tracking_url"` // Tracking pixel URL for {{.Tracker}} placeholder (open tracking)
 }
 
 // N8NDialer implements the mailer.Dialer interface for n8n webhook
@@ -136,10 +142,20 @@ func (s *N8NSender) Send(from string, to []string, msg io.WriterTo) error {
 		// Calculate send time using campaign's timing logic
 		sendAt := s.campaign.generateSendDate(idx, totalRecipients)
 
+		// Build personalized URLs using public base URL
+		// GetPublicBaseURL prioritizes: 1) PUBLIC_BASE_URL env var, 2) Campaign URL (if not localhost)
+		phishingURL := GetPublicTrackingURL(nil, s.campaign.URL, result.RId)        // Landing page URL (click tracking)
+		trackingPixelURL := GetPublicTrackingPixelURL(nil, s.campaign.URL, result.RId) // /track endpoint (open tracking)
+
 		recipientsWithTiming = append(recipientsWithTiming, RecipientWithTiming{
-			Email:  email,
-			RId:    result.RId,
-			SendAt: sendAt,
+			Email:       email,
+			FirstName:   result.FirstName,
+			LastName:    result.LastName,
+			Position:    result.Position,
+			RId:         result.RId,
+			SendAt:      sendAt,
+			PhishingURL: phishingURL,
+			TrackingURL: trackingPixelURL,
 		})
 	}
 
@@ -148,9 +164,13 @@ func (s *N8NSender) Send(from string, to []string, msg io.WriterTo) error {
 	}
 
 	// Build enhanced payload with campaign context
+	// Use public-facing URL (Cloudflare Tunnel, App Platform, etc.)
+	publicBaseURL := GetPublicBaseURL(nil, s.campaign.URL)
+
 	payload := N8NWebhookPayload{
 		EmailType:       s.emailType,
 		CampaignId:      s.campaign.Id,
+		CampaignURL:     publicBaseURL,
 		LaunchDate:      s.campaign.LaunchDate,
 		SendByDate:      s.campaign.SendByDate,
 		TotalRecipients: len(recipientsWithTiming),
