@@ -43,4 +43,4 @@ config-test.json
 ssl/
 # n8n exports (contains sensitive credentials)
 n8n-exports/
-.crt
+*.crt

@@ -76,20 +76,32 @@ function launch() {
         return;
     }
 
-    // console.log("Validation passed, showing confirmation");
+    // console.log("Validation passed, checking rate limits");
 
-    // All validation passed, show confirmation dialog
-    Swal.fire({
-        title: "Are you sure?",
-        text: "This will schedule the campaign to be launched.",
-        type: "question",
-        animation: false,
-        showCancelButton: true,
-        confirmButtonText: "Launch",
-        confirmButtonColor: "#428bca",
-        reverseButtons: true
-    }).then(function (result) {
-        if (result.value) {
+    // Validate rate limit before showing confirmation
+    validateRateLimit(name, template, page, profile, users, launchDate, sendByDate, function(rateLimitPassed, adjustedSendByDate) {
+        if (!rateLimitPassed) {
+            return; // User cancelled or validation failed
+        }
+
+        // Update sendByDate if it was adjusted
+        if (adjustedSendByDate) {
+            sendByDate = adjustedSendByDate;
+            $("#send_by_date").val(adjustedSendByDate);
+        }
+
+        // All validation passed, show confirmation dialog
+        Swal.fire({
+            title: "Are you sure?",
+            text: "This will schedule the campaign to be launched.",
+            type: "question",
+            animation: false,
+            showCancelButton: true,
+            confirmButtonText: "Launch",
+            confirmButtonColor: "#428bca",
+            reverseButtons: true
+        }).then(function (result) {
+            if (result.value) {
             // Flag to track if user dismissed the dialog
             var userDismissed = false;
             var timeoutId = null;
@@ -221,8 +233,120 @@ function launch() {
                         });
                     }
                 })
+            }
+        })
+    });
+}
+
+// validateRateLimit checks if the campaign's send-by date meets rate limiting requirements
+// Calls the API endpoint and shows a warning modal if the rate is too aggressive
+function validateRateLimit(name, template, page, profile, users, launchDate, sendByDate, callback) {
+    // Extract group IDs from users selection
+    var groupIDs = [];
+    $("#users").select2("data").forEach(function (group) {
+        groupIDs.push(parseInt(group.id));
+    });
+
+    // Convert dates to ISO 8601 format for API
+    var launchDateISO = moment(launchDate, "MMMM Do YYYY, h:mm a").utc().format();
+    var sendByDateISO = sendByDate && sendByDate.trim() !== ""
+        ? moment(sendByDate, "MMMM Do YYYY, h:mm a").utc().format()
+        : "";
+
+    // Call rate limit validation API
+    $.ajax({
+        url: "/api/campaigns/validate-rate-limit",
+        method: "POST",
+        data: JSON.stringify({
+            launch_date: launchDateISO,
+            send_by_date: sendByDateISO || null,
+            group_ids: groupIDs
+        }),
+        contentType: "application/json",
+        dataType: "json",
+        beforeSend: function (xhr) {
+            xhr.setRequestHeader('Authorization', 'Bearer ' + user.api_key);
         }
     })
+    .done(function(data) {
+        if (data.success) {
+            // Rate limit is acceptable - proceed
+            callback(true, null);
+        } else if (data.warning) {
+            // Rate limit is too aggressive - show warning modal
+            showRateLimitWarning(data.warning, function(accepted, useMinimum) {
+                if (!accepted) {
+                    // User cancelled
+                    callback(false, null);
+                } else if (useMinimum) {
+                    // User accepted and wants to use minimum safe date
+                    var adjustedDate = moment(data.warning.minimum_send_by_date).format("MMMM Do YYYY, h:mm a");
+                    callback(true, adjustedDate);
+                } else {
+                    // User accepted but wants to keep their date (risky)
+                    callback(true, null);
+                }
+            });
+        } else {
+            // Unknown response format
+            callback(true, null);
+        }
+    })
+    .fail(function(xhr, status, error) {
+        // API call failed - log error but proceed with campaign creation
+        console.error("Rate limit validation failed:", error);
+        callback(true, null);
+    });
+}
+
+// showRateLimitWarning displays a warning modal about aggressive send rates
+function showRateLimitWarning(warning, callback) {
+    var warningHTML = `
+        <div style="text-align: left; margin-bottom: 20px;">
+            <p><strong>⚠️ Your campaign will send emails too quickly!</strong></p>
+            <p>${warning.warning_message}</p>
+            <hr>
+            <p><strong>Your Settings:</strong></p>
+            <ul>
+                <li>Sending to: <strong>${warning.total_recipients}</strong> recipients</li>
+                <li>Interval: <strong>${warning.provided_interval_seconds.toFixed(1)}</strong> seconds per recipient</li>
+                <li>Send-by date: <strong>${moment(warning.provided_send_by_date).format("MMMM Do YYYY, h:mm a")}</strong></li>
+            </ul>
+            <hr>
+            <p><strong>Recommended Safe Settings:</strong></p>
+            <ul>
+                <li>Interval: <strong>${warning.minimum_interval_seconds}</strong> seconds per recipient (${(warning.minimum_interval_seconds / 60).toFixed(1)} minutes)</li>
+                <li>Send-by date: <strong>${moment(warning.minimum_send_by_date).format("MMMM Do YYYY, h:mm a")}</strong></li>
+                <li>Total duration: <strong>${warning.recommended_duration}</strong></li>
+            </ul>
+        </div>
+    `;
+
+    Swal.fire({
+        title: "⚠️ Rate Limit Warning",
+        html: warningHTML,
+        type: "warning",
+        showCancelButton: true,
+        showDenyButton: true,
+        confirmButtonText: "Use Safe Settings",
+        denyButtonText: "Keep My Settings (Risky)",
+        cancelButtonText: "Cancel",
+        confirmButtonColor: "#28a745",
+        denyButtonColor: "#ffc107",
+        cancelButtonColor: "#6c757d",
+        reverseButtons: true
+    }).then(function (result) {
+        if (result.value) {
+            // User chose to use safe settings
+            callback(true, true);
+        } else if (result.isDenied) {
+            // User chose to keep their risky settings
+            callback(true, false);
+        } else {
+            // User cancelled
+            callback(false, false);
+        }
+    });
 }
 
 // Attempts to send a test email by POSTing to /campaigns/

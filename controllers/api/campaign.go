@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"time"
 
 	ctx "github.com/gophish/gophish/context"
 	log "github.com/gophish/gophish/logger"
@@ -134,4 +135,89 @@ func (as *Server) CampaignComplete(w http.ResponseWriter, r *http.Request) {
 		}
 		JSONResponse(w, models.Response{Success: true, Message: "Campaign completed successfully!"}, http.StatusOK)
 	}
+}
+
+// ValidateCampaignRateLimitRequest represents the request payload for rate limit validation
+type ValidateCampaignRateLimitRequest struct {
+	LaunchDate time.Time `json:"launch_date"`
+	SendByDate time.Time `json:"send_by_date"`
+	GroupIDs   []int64   `json:"group_ids"`
+}
+
+// ValidateCampaignRateLimitResponse represents the response for rate limit validation
+type ValidateCampaignRateLimitResponse struct {
+	Success bool                      `json:"success"`
+	Warning *models.RateLimitWarning  `json:"warning,omitempty"`
+	Message string                    `json:"message,omitempty"`
+}
+
+// ValidateCampaignRateLimit validates if a campaign's send-by date meets rate limiting requirements
+// POST /api/campaigns/validate-rate-limit
+func (as *Server) ValidateCampaignRateLimit(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		JSONResponse(w, models.Response{Success: false, Message: "Method not allowed"}, http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Parse request
+	var req ValidateCampaignRateLimitRequest
+	err := json.NewDecoder(r.Body).Decode(&req)
+	if err != nil {
+		JSONResponse(w, models.Response{Success: false, Message: "Invalid JSON structure"}, http.StatusBadRequest)
+		return
+	}
+
+	// Validate required fields
+	if req.LaunchDate.IsZero() {
+		JSONResponse(w, models.Response{Success: false, Message: "Launch date is required"}, http.StatusBadRequest)
+		return
+	}
+
+	if len(req.GroupIDs) == 0 {
+		JSONResponse(w, models.Response{Success: false, Message: "At least one group is required"}, http.StatusBadRequest)
+		return
+	}
+
+	// Get user ID from context
+	userID := ctx.Get(r, "user_id").(int64)
+
+	// Count total recipients from all groups
+	totalRecipients := 0
+	for _, groupID := range req.GroupIDs {
+		g, err := models.GetGroup(groupID, userID)
+		if err != nil {
+			log.Errorf("Failed to get group %d: %v", groupID, err)
+			JSONResponse(w, models.Response{Success: false, Message: "Failed to retrieve group information"}, http.StatusInternalServerError)
+			return
+		}
+		totalRecipients += len(g.Targets)
+	}
+
+	// If no recipients, return success
+	if totalRecipients == 0 {
+		JSONResponse(w, ValidateCampaignRateLimitResponse{
+			Success: true,
+			Message: "No recipients found in selected groups",
+		}, http.StatusOK)
+		return
+	}
+
+	// Validate rate limit
+	warning := models.ValidateCampaignRateLimit(req.LaunchDate, req.SendByDate, totalRecipients)
+
+	if warning != nil {
+		// Rate limit is too aggressive - return warning
+		JSONResponse(w, ValidateCampaignRateLimitResponse{
+			Success: false,
+			Warning: warning,
+			Message: "Campaign sending rate is too aggressive",
+		}, http.StatusOK)
+		return
+	}
+
+	// Rate limit is acceptable or will be auto-calculated
+	JSONResponse(w, ValidateCampaignRateLimitResponse{
+		Success: true,
+		Message: "Campaign rate limit is acceptable",
+	}, http.StatusOK)
 }

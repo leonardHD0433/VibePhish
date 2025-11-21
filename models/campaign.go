@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
+	"strconv"
 	"time"
 
 	log "github.com/gophish/gophish/logger"
@@ -496,6 +498,15 @@ func PostCampaign(c *Campaign, uid int64) error {
 		}
 		totalRecipients += len(c.Groups[i].Targets)
 	}
+
+	// Auto-calculate send-by date if not provided (rate limiting)
+	// This ensures emails are spaced out safely to avoid spam filters and account lockouts
+	if c.SendByDate.IsZero() && totalRecipients > 0 {
+		c.SendByDate = CalculateMinimumSendByDate(c.LaunchDate, totalRecipients)
+		log.Infof("Auto-calculated send-by date for campaign: %v (launch: %v, recipients: %d, interval: %v)",
+			c.SendByDate, c.LaunchDate, totalRecipients, GetDefaultSendInterval())
+	}
+
 	// Check to make sure the template exists
 	t, err := GetTemplateByName(c.Template.Name, uid)
 	if err == gorm.ErrRecordNotFound {
@@ -745,4 +756,115 @@ func CompleteCampaign(id int64, uid int64) error {
 		log.Error(err)
 	}
 	return err
+}
+
+// RateLimitWarning contains information about rate limiting warnings
+type RateLimitWarning struct {
+	IsAggressive         bool      `json:"is_aggressive"`
+	ProvidedSendByDate   time.Time `json:"provided_send_by_date"`
+	MinimumSendByDate    time.Time `json:"minimum_send_by_date"`
+	ProvidedInterval     float64   `json:"provided_interval_seconds"`
+	MinimumInterval      float64   `json:"minimum_interval_seconds"`
+	TotalRecipients      int       `json:"total_recipients"`
+	RecommendedDuration  string    `json:"recommended_duration"`
+	WarningMessage       string    `json:"warning_message"`
+}
+
+// GetDefaultSendInterval returns the default interval between emails in seconds
+// from environment variable DEFAULT_EMAIL_SEND_INTERVAL, defaulting to 120 seconds (2 minutes)
+func GetDefaultSendInterval() time.Duration {
+	intervalStr := os.Getenv("DEFAULT_EMAIL_SEND_INTERVAL")
+	if intervalStr == "" {
+		return 120 * time.Second // Default: 2 minutes
+	}
+
+	interval, err := strconv.ParseInt(intervalStr, 10, 64)
+	if err != nil {
+		log.Warnf("Invalid DEFAULT_EMAIL_SEND_INTERVAL value '%s', using default 120 seconds", intervalStr)
+		return 120 * time.Second
+	}
+
+	if interval < 1 {
+		log.Warnf("DEFAULT_EMAIL_SEND_INTERVAL too small (%d), using default 120 seconds", interval)
+		return 120 * time.Second
+	}
+
+	return time.Duration(interval) * time.Second
+}
+
+// CalculateMinimumSendByDate calculates the minimum send-by date based on launch date and recipient count
+func CalculateMinimumSendByDate(launchDate time.Time, recipientCount int) time.Time {
+	interval := GetDefaultSendInterval()
+	totalDuration := time.Duration(recipientCount) * interval
+	return launchDate.Add(totalDuration)
+}
+
+// ValidateCampaignRateLimit checks if a campaign's send-by date is too aggressive
+// Returns a RateLimitWarning with details if the rate is too fast
+func ValidateCampaignRateLimit(launchDate, sendByDate time.Time, recipientCount int) *RateLimitWarning {
+	if recipientCount == 0 {
+		return nil // No recipients, no warning needed
+	}
+
+	minimumInterval := GetDefaultSendInterval()
+	minimumSendByDate := CalculateMinimumSendByDate(launchDate, recipientCount)
+
+	// If send-by date is zero (not provided), it's not aggressive - will be auto-set
+	if sendByDate.IsZero() {
+		return nil
+	}
+
+	// If send-by date is after minimum, it's safe
+	if sendByDate.After(minimumSendByDate) || sendByDate.Equal(minimumSendByDate) {
+		return nil
+	}
+
+	// Calculate provided interval
+	duration := sendByDate.Sub(launchDate)
+	providedInterval := duration.Seconds() / float64(recipientCount)
+
+	// Build warning message
+	warningMsg := fmt.Sprintf(
+		"Your campaign will send emails too quickly (%.1f seconds per recipient). "+
+			"This may trigger spam filters and lock your email account. "+
+			"Microsoft 365 allows 30 emails/minute but sending too fast looks suspicious. "+
+			"We recommend spacing emails by %.0f seconds (%.1f minutes) per recipient.",
+		providedInterval,
+		minimumInterval.Seconds(),
+		minimumInterval.Minutes(),
+	)
+
+	// Format recommended duration
+	recommendedDuration := formatDuration(minimumSendByDate.Sub(launchDate))
+
+	return &RateLimitWarning{
+		IsAggressive:        true,
+		ProvidedSendByDate:  sendByDate,
+		MinimumSendByDate:   minimumSendByDate,
+		ProvidedInterval:    providedInterval,
+		MinimumInterval:     minimumInterval.Seconds(),
+		TotalRecipients:     recipientCount,
+		RecommendedDuration: recommendedDuration,
+		WarningMessage:      warningMsg,
+	}
+}
+
+// formatDuration formats a duration into a human-readable string
+func formatDuration(d time.Duration) string {
+	hours := int(d.Hours())
+	minutes := int(d.Minutes()) % 60
+
+	if hours > 0 {
+		if minutes > 0 {
+			return fmt.Sprintf("%d hours %d minutes", hours, minutes)
+		}
+		return fmt.Sprintf("%d hours", hours)
+	}
+
+	if minutes > 0 {
+		return fmt.Sprintf("%d minutes", minutes)
+	}
+
+	seconds := int(d.Seconds())
+	return fmt.Sprintf("%d seconds", seconds)
 }
