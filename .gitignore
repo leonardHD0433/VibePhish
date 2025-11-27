@@ -29,7 +29,7 @@ gophish_admin.key
 *.exe
 gophish.db*
 gophish
-fyphish
+/fyphish
 .env
 .env.*
 !.env.example
