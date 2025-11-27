@@ -44,28 +44,59 @@
             </div>
             <div class="modal-body" id="modal_body">
                 <div class="row" id="modal.flashes"></div>
-                <label class="control-label" for="username">Username:</label>
+                <label class="control-label" for="username">Username (Email):</label>
                 <div class="form-group">
-                    <input type="text" class="form-control" placeholder="Username" id="username" autofocus />
+                    <input type="text" class="form-control" placeholder="user@example.com" id="username" autofocus />
                 </div>
-                <label class="control-label" for="password">Password:</label>
+
+                <!-- Authentication Type Selection -->
+                <label class="control-label">Authentication Type:</label>
                 <div class="form-group">
-                    <input type="password" class="form-control" autocomplete="new-password" placeholder="Password" id="password" required />
-                    <div class="hidden" id="password-strength-container">
-                        <div class="progress" id="password-strength">
-                            <div id="password-strength-bar" class="progress-bar" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
-                        </div>
-                        <span id="password-strength-description"></span>
+                    <div class="radio">
+                        <input type="radio" name="auth_type" id="auth_type_local" value="local" checked>
+                        <label for="auth_type_local">
+                            Local Account (Password-based)
+                        </label>
+                    </div>
+                    <div class="radio">
+                        <input type="radio" name="auth_type" id="auth_type_oauth" value="oauth">
+                        <label for="auth_type_oauth">
+                            OAuth Account (SSO-based)
+                        </label>
                     </div>
                 </div>
-                <label class="control-label" for="confirm_password">Confirm Password:</label>
-                <div class="form-group">
-                    <input type="password" class="form-control" placeholder="Confirm Password" id="confirm_password"
-                        required />
+
+                <!-- OAuth Provider Selection (hidden by default) -->
+                <div id="oauth_provider_section" style="display: none;">
+                    <label class="control-label" for="oauth_provider">OAuth Provider:</label>
+                    <div class="form-group">
+                        <select class="form-control" id="oauth_provider">
+                            <option value="microsoft" selected>Microsoft</option>
+                        </select>
+                        <small class="text-muted">Currently only Microsoft OAuth is supported</small>
+                    </div>
                 </div>
-                <div class="checkbox checkbox-primary">
-                    <input id="force_password_change_checkbox" type="checkbox" checked>
-                    <label for="force_password_change_checkbox">Require the user to set a new password</label>
+
+                <!-- Password Fields (shown by default for local accounts) -->
+                <div id="password_section">
+                    <label class="control-label" for="password">Password:</label>
+                    <div class="form-group">
+                        <input type="password" class="form-control" autocomplete="new-password" placeholder="Password" id="password" />
+                        <div class="hidden" id="password-strength-container">
+                            <div class="progress" id="password-strength">
+                                <div id="password-strength-bar" class="progress-bar" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
+                            </div>
+                            <span id="password-strength-description"></span>
+                        </div>
+                    </div>
+                    <label class="control-label" for="confirm_password">Confirm Password:</label>
+                    <div class="form-group">
+                        <input type="password" class="form-control" placeholder="Confirm Password" id="confirm_password" />
+                    </div>
+                    <div class="checkbox checkbox-primary">
+                        <input id="force_password_change_checkbox" type="checkbox" checked>
+                        <label for="force_password_change_checkbox">Require the user to set a new password</label>
+                    </div>
                 </div>
                 <div class="checkbox checkbox-primary">
                     <input id="account_locked_checkbox" type="checkbox">

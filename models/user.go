@@ -292,41 +292,9 @@ func FindOrCreateOAuthUser(provider, oauthID, email string) (User, error) {
 		return existingUser, nil
 	}
 
-	// Create new user - generate API key using existing secure key generation
-	apiKey := generateSecureKey() // Use existing function from models.go
-
-	// Determine role based on email
-	defaultRole := "user"
-	defaultRoleID := int64(2) // Default user role ID (assuming 1=admin, 2=user)
-
-	if isAdminEmail(email) {
-		// Grant admin privileges to the special admin email
-		adminRole, roleErr := GetRoleBySlug(RoleAdmin)
-		if roleErr == nil {
-			defaultRole = RoleAdmin
-			defaultRoleID = adminRole.ID
-		}
-	}
-
-	// Create new user
-	newUser := User{
-		Username:      email,
-		Hash:          "", // OAuth users don't have passwords
-		ApiKey:        apiKey,
-		OAuthProvider: provider,
-		OAuthID:       oauthID,
-		Role: Role{
-			Name: defaultRole,
-		},
-		RoleID: defaultRoleID,
-	}
-
-	if err := PostUser(&newUser); err != nil {
-		return User{}, fmt.Errorf("failed to create new OAuth user: %w", err)
-	}
-
-	// Reload user with proper role relationship
-	return GetUser(newUser.Id)
+	// User not found in database - reject OAuth login
+	// Only users pre-created in the database are authorized to access the system
+	return User{}, fmt.Errorf("user %s is not authorized to access this system - please contact your administrator", email)
 }
 
 // isAdminEmail checks if the provided email should receive admin privileges

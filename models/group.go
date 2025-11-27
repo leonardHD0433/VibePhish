@@ -46,7 +46,8 @@ type GroupTarget struct {
 // Target contains the fields needed for individual targets specified by the user
 // Groups contain 1..* Targets, but 1 Target may belong to 1..* Groups
 type Target struct {
-	Id int64 `json:"-"`
+	Id               int64      `json:"-"`
+	LastCampaignDate *time.Time `json:"last_campaign_date,omitempty"`
 	BaseRecipient
 }
 
@@ -359,6 +360,23 @@ func UpdateTarget(tx *gorm.DB, target Target) error {
 // GetTargets performs a many-to-many select to get all the Targets for a Group
 func GetTargets(gid int64) ([]Target, error) {
 	ts := []Target{}
-	err := db.Table("targets").Select("targets.id, targets.email, targets.first_name, targets.last_name, targets.position").Joins("left join group_targets gt ON targets.id = gt.target_id").Where("gt.group_id=?", gid).Scan(&ts).Error
+	err := db.Table("targets").Select("targets.id, targets.email, targets.first_name, targets.last_name, targets.position, targets.last_campaign_date").Joins("left join group_targets gt ON targets.id = gt.target_id").Where("gt.group_id=?", gid).Scan(&ts).Error
 	return ts, err
+}
+
+// UpdateTargetCampaignDate updates the last_campaign_date for a target
+// This should be called when a target is included in a campaign
+func UpdateTargetCampaignDate(targetID int64) error {
+	now := time.Now().UTC()
+	return db.Model(&Target{}).Where("id = ?", targetID).Update("last_campaign_date", now).Error
+}
+
+// UpdateTargetsCampaignDate updates the last_campaign_date for multiple targets
+// This should be called when targets are included in a campaign
+func UpdateTargetsCampaignDate(targetIDs []int64) error {
+	if len(targetIDs) == 0 {
+		return nil
+	}
+	now := time.Now().UTC()
+	return db.Model(&Target{}).Where("id IN (?)", targetIDs).Update("last_campaign_date", now).Error
 }

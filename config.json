@@ -37,10 +37,7 @@
         "client_id": "${MICROSOFT_CLIENT_ID}",
         "client_secret": "${MICROSOFT_CLIENT_SECRET}",
         "tenant_id": "${MICROSOFT_TENANT_ID}",
-        "allowed_domains": [
-          "outlook.com",
-          "student.uow.edu.my"
-        ],
+        "allowed_domains": [],
         "admin_domains": [
           "outlook.com"
         ],

@@ -8,6 +8,7 @@ import (
 	"html/template"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -225,12 +226,16 @@ func (as *AdminServer) registerRoutes() {
 }
 
 type templateParams struct {
-	Title        string
-	Flashes      []interface{}
-	User         models.User
-	Token        string
-	Version      string
-	ModifySystem bool
+	Title           string
+	Flashes         []interface{}
+	User            models.User
+	Token           string
+	Version         string
+	ModifySystem    bool
+	N8nChatURL      string
+	N8nChatUser     string
+	N8nChatPassword string
+	ApiBaseURL      string
 }
 
 // newTemplateParams returns the default template parameters for a user and
@@ -259,6 +264,15 @@ func (as *AdminServer) Base(w http.ResponseWriter, r *http.Request) {
 func (as *AdminServer) Campaigns(w http.ResponseWriter, r *http.Request) {
 	params := newTemplateParams(r)
 	params.Title = "Campaigns"
+	// Load n8n chat configuration from environment variables
+	params.N8nChatURL = os.Getenv("N8N_CHAT_WEBHOOK_URL")
+	params.N8nChatUser = os.Getenv("N8N_CHAT_USER")
+	params.N8nChatPassword = os.Getenv("N8N_CHAT_PASSWORD")
+
+	// FYPHISH_API_BASE_URL: API server URL for n8n workflows (port 3333)
+	// This is used by n8n to call back to FYPhish API endpoints
+	params.ApiBaseURL = os.Getenv("FYPHISH_API_BASE_URL")
+
 	getTemplate(w, "campaigns").ExecuteTemplate(w, "base", params)
 }
 

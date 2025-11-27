@@ -96,14 +96,16 @@
                             <i class="fa fa-magic"></i>
                             <span>Copilot</span>
                         </button>
+                        <!-- Auto mode - TODO: Implement fully automated campaign creation
                         <button type="button" class="mode-toggle-btn" data-mode="auto">
                             <i class="fa fa-rocket"></i>
                             <span>Auto</span>
                         </button>
+                        -->
                     </div>
                 </div>
 
-                <!-- AI Chatbox Interface (Copilot & Auto modes) -->
+                <!-- AI Chatbox Interface (Copilot mode) -->
                 <div id="ai-chat-interface" class="ai-chat-interface">
                     <div class="chat-mode-info">
                         <div class="info-badge copilot-mode">
@@ -112,55 +114,10 @@
                         </div>
                     </div>
 
-                    <div class="chat-container">
-                        <div class="chat-messages" id="chatMessages">
-                            <div class="chat-message ai-message">
-                                <div class="message-avatar">
-                                    <i class="fa fa-robot"></i>
-                                </div>
-                                <div class="message-content">
-                                    <p><strong>FYPhish AI Assistant</strong></p>
-                                    <p>Hello! I'm here to help you create an effective phishing campaign. Let's start by understanding your goals.</p>
-                                    <p>What type of campaign would you like to create?</p>
-                                    <div class="quick-suggestions">
-                                        <button class="suggestion-btn" onclick="sendQuickReply('Credential harvesting campaign')">
-                                            <i class="fa fa-key"></i> Credential Harvesting
-                                        </button>
-                                        <button class="suggestion-btn" onclick="sendQuickReply('Link clicking awareness')">
-                                            <i class="fa fa-link"></i> Link Awareness
-                                        </button>
-                                        <button class="suggestion-btn" onclick="sendQuickReply('Attachment awareness')">
-                                            <i class="fa fa-paperclip"></i> Attachment Awareness
-                                        </button>
-                                        <button class="suggestion-btn" onclick="sendQuickReply('Custom campaign')">
-                                            <i class="fa fa-cog"></i> Custom
-                                        </button>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
+                    <!-- n8n Chat Widget Container -->
+                    <div id="n8n-chat-container" class="n8n-chat-wrapper"></div>
 
-                        <div class="chat-input-area">
-                            <div class="input-wrapper">
-                                <textarea
-                                    class="chat-input"
-                                    id="chatInput"
-                                    placeholder="Describe your campaign goals or ask for suggestions..."
-                                    rows="2"></textarea>
-                                <button class="send-btn" id="sendChatBtn" onclick="sendChatMessage()">
-                                    <i class="fa fa-paper-plane"></i>
-                                </button>
-                            </div>
-                            <div class="chat-footer-info">
-                                <small class="text-muted">
-                                    <i class="fa fa-lightbulb-o"></i>
-                                    Pro tip: Be specific about your target audience and campaign objectives
-                                </small>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Campaign Preview (shown after AI generates suggestions) -->
+                    <!-- Campaign Preview (shown after AI collects all info) -->
                     <div class="campaign-preview" id="campaignPreview" style="display: none;">
                         <div class="preview-header">
                             <h5><i class="fa fa-eye"></i> Campaign Preview</h5>
@@ -270,5 +227,321 @@
     </div>
 </div>
 {{end}} {{define "scripts"}}
+<!-- n8n Chat Widget -->
+<link href="https://cdn.jsdelivr.net/npm/@n8n/chat/dist/style.css" rel="stylesheet" />
+<script type="module">
+    import { createChat } from 'https://cdn.jsdelivr.net/npm/@n8n/chat/dist/chat.bundle.es.js';
+
+    // Wait for DOM and campaigns.js to load
+    window.addEventListener('load', function() {
+        // Initialize n8n chat when switching to copilot/auto mode
+        window.initN8nChat = function(mode) {
+            const container = document.getElementById('n8n-chat-container');
+            if (!container) return;
+
+            // Clear any existing chat
+            container.innerHTML = '';
+
+            // Create unique session ID for this campaign creation session
+            const sessionId = 'campaign-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+
+            // Store session ID for later use
+            window.currentChatSessionId = sessionId;
+
+            // Initial message for Copilot mode
+            // TODO: Add auto mode message when implementing fully automated campaign creation
+            // const autoMessage = "Hi! I'm your AI campaign assistant in **Auto Mode**. Give me a minimum a phishing scenario you would like to simulate (e.g., password reset, invoice payment, account verification) and let me handle the rest. Let's get started!";
+            const initialMessage = "Hi! I'm your AI campaign assistant. I'll help you create a phishing campaign step by step. What would you like to do today (Google password reset, invoice payment, account verification)?";
+
+            // Get n8n chat config from server-side template variables
+            const n8nChatUrl = '{{.N8nChatURL}}';
+            const n8nChatUser = '{{.N8nChatUser}}';
+            const n8nChatPassword = '{{.N8nChatPassword}}';
+            const apiBaseUrl = '{{.ApiBaseURL}}';
+
+            if (!n8nChatUrl) {
+                console.warn('N8N_CHAT_WEBHOOK_URL not configured');
+                container.innerHTML = '<div class="alert alert-warning">AI Chat not configured. Please set N8N_CHAT_WEBHOOK_URL in environment.</div>';
+                return;
+            }
+
+            createChat({
+                webhookUrl: n8nChatUrl,
+                webhookConfig: {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': 'Basic ' + btoa(n8nChatUser + ':' + n8nChatPassword)
+                    }
+                },
+                target: '#n8n-chat-container',
+                mode: 'fullscreen',
+                chatInputKey: 'chatInput',
+                chatSessionKey: 'sessionId',
+                metadata: {
+                    user_id: user.api_key ? 2 : 1,
+                    mode: mode,
+                    api_base_url: apiBaseUrl  // FYPHISH_API_BASE_URL from .env (port 3333)
+                },
+                initialMessages: [initialMessage],
+                i18n: {
+                    en: {
+                        title: 'Campaign Assistant',
+                        // TODO: Add auto mode subtitle when implementing: mode === 'auto' ? 'Auto Mode - Fully automated campaign creation' : ...
+                        subtitle: 'Copilot Mode - AI-assisted campaign creation',
+                        footer: '',
+                        getStarted: 'Start Creating',
+                        inputPlaceholder: 'Type your message...',
+                        closeButtonTooltip: 'Close chat'
+                    }
+                },
+                showWelcomeScreen: false,
+                allowFileUploads: false
+            });
+        };
+    });
+</script>
+<style>
+    /* n8n Chat Custom Styling for FYPhish - Matching System Theme */
+    .n8n-chat-wrapper {
+        /* Primary Colors - Match FYPhish dark navy theme */
+        --chat--color--primary: #2c3e50;
+        --chat--color--primary-shade-50: #34495e;
+        --chat--color--primary-shade-100: #1a252f;
+        --chat--color--secondary: #1abc9c;
+        --chat--color--secondary-shade-50: #16a085;
+        --chat--color--white: #ffffff;
+        --chat--color--light: #f8f9fa;
+        --chat--color--light-shade-50: #e9ecef;
+        --chat--color--light-shade-100: #dee2e6;
+        --chat--color--medium: #6c757d;
+        --chat--color--dark: #2c3e50;
+        --chat--color--disabled: #adb5bd;
+        --chat--color--typing: #6c757d;
+
+        /* Sizing - Fit within modal */
+        --chat--window--width: 100%;
+        --chat--window--height: 100%;
+
+        /* Messages */
+        --chat--message--font-size: 14px;
+        --chat--message--border-radius: 12px;
+        --chat--message--padding: 10px 14px;
+
+        /* Input */
+        --chat--input--background: var(--chat--color--white);
+        --chat--input--border-radius: 8px;
+        --chat--input--font-size: 14px;
+        --chat--input--placeholder-color: #adb5bd;
+
+        /* Container */
+        --chat--border-radius: 8px;
+        --chat--transition-duration: 0.2s;
+
+        /* Chat container sizing - clean design */
+        width: 100%;
+        height: 500px;
+        min-height: 500px;
+        max-height: 500px;
+        border-radius: 8px;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        /* Subtle border matching system theme */
+        border: 1px solid #dee2e6;
+        background: #f8f9fa;
+    }
+
+    /* Override n8n chat fullscreen mode to fit in modal */
+    .n8n-chat-wrapper .chat-wrapper,
+    .n8n-chat-wrapper > div {
+        position: relative !important;
+        width: 100% !important;
+        height: 100% !important;
+        max-height: 500px !important;
+        display: flex !important;
+        flex-direction: column !important;
+        inset: unset !important;
+        border: none !important;
+        box-shadow: none !important;
+        background: transparent !important;
+    }
+
+    /* Chat window container - the main window, no extra borders */
+    .n8n-chat-wrapper .chat-window,
+    .n8n-chat-wrapper [class*="chat-window"] {
+        position: relative !important;
+        width: 100% !important;
+        height: 100% !important;
+        max-height: 500px !important;
+        display: flex !important;
+        flex-direction: column !important;
+        border-radius: 8px !important;
+        overflow: hidden !important;
+        border: none !important;
+        box-shadow: none !important;
+    }
+
+    /* Chat body (messages + input) */
+    .n8n-chat-wrapper .chat-body {
+        display: flex !important;
+        flex-direction: column !important;
+        flex: 1 1 auto !important;
+        min-height: 0 !important;
+        overflow: hidden !important;
+        height: 100% !important;
+    }
+
+    /* Style the chat messages area - enable scrolling */
+    .n8n-chat-wrapper .chat-messages-container,
+    .n8n-chat-wrapper .chat-messages,
+    .n8n-chat-wrapper [class*="chat-messages"] {
+        background-color: #f8f9fa !important;
+        padding: 16px !important;
+        flex: 1 1 auto !important;
+        overflow-y: auto !important;
+        overflow-x: hidden !important;
+        min-height: 0 !important;
+        max-height: none !important;
+        height: auto !important;
+        -webkit-overflow-scrolling: touch !important;
+    }
+
+    /* Ensure the messages list scrolls */
+    .n8n-chat-wrapper .chat-messages-list,
+    .n8n-chat-wrapper [class*="messages-list"] {
+        overflow-y: auto !important;
+        flex: 1 1 auto !important;
+        min-height: 0 !important;
+    }
+
+    /* Bot message styling */
+    .n8n-chat-wrapper .chat-message-bot .chat-message-content,
+    .n8n-chat-wrapper [class*="message-bot"],
+    .n8n-chat-wrapper [class*="message-from-bot"] {
+        background: #ffffff !important;
+        color: #2c3e50 !important;
+        border: 1px solid #dee2e6 !important;
+        border-radius: 12px !important;
+        padding: 10px 14px !important;
+    }
+
+    /* Bot message avatar styling */
+    .n8n-chat-wrapper .chat-message-bot .chat-message-avatar,
+    .n8n-chat-wrapper [class*="avatar"] {
+        background: #2c3e50 !important;
+    }
+
+    /* User message styling - dark navy theme */
+    .n8n-chat-wrapper .chat-message-user .chat-message-content,
+    .n8n-chat-wrapper [class*="message-user"],
+    .n8n-chat-wrapper [class*="chat-message-from-user"],
+    .n8n-chat-wrapper [class*="message-from-user"] {
+        background: #2c3e50 !important;
+        color: white !important;
+        border-radius: 12px !important;
+        padding: 10px 14px !important;
+        border: none !important;
+    }
+
+    /* User message text color */
+    .n8n-chat-wrapper .chat-message-user .chat-message-content *,
+    .n8n-chat-wrapper [class*="message-user"] *,
+    .n8n-chat-wrapper [class*="chat-message-from-user"] *,
+    .n8n-chat-wrapper [class*="message-from-user"] * {
+        color: white !important;
+    }
+
+    /* User message bubble wrapper */
+    .n8n-chat-wrapper .chat-message-user,
+    .n8n-chat-wrapper [class*="chat-message"][class*="user"] {
+        justify-content: flex-end !important;
+    }
+
+    /* REMOVE ALL BORDERS from everything inside the wrapper */
+    .n8n-chat-wrapper *,
+    .n8n-chat-wrapper *::before,
+    .n8n-chat-wrapper *::after {
+        border: none !important;
+        box-shadow: none !important;
+        outline: none !important;
+    }
+
+    /* Input area styling - compact footer */
+    .n8n-chat-wrapper .chat-input-container,
+    .n8n-chat-wrapper .chat-footer,
+    .n8n-chat-wrapper [class*="chat-footer"],
+    .n8n-chat-wrapper [class*="chat_footer"] {
+        background: #ffffff !important;
+        padding: 8px 12px !important;
+        flex-shrink: 0 !important;
+        border-radius: 0 !important;
+        min-height: 70px !important;
+        height: auto !important;
+    }
+
+    .n8n-chat-wrapper [class*="input"] {
+        background: #ffffff !important;
+        padding: 0 !important;
+        border-radius: 0 !important;
+    }
+
+    /* Only the actual textarea/input should have visible border */
+    .n8n-chat-wrapper textarea,
+    .n8n-chat-wrapper input[type="text"] {
+        border: 1px solid #ced4da !important;
+        border-radius: 6px !important;
+        padding: 10px 14px !important;
+        font-size: 14px !important;
+        background: white !important;
+        margin-right: 10px !important;
+        flex: 1 !important;
+    }
+
+    .n8n-chat-wrapper textarea:focus,
+    .n8n-chat-wrapper input[type="text"]:focus {
+        border-color: #2c3e50 !important;
+        box-shadow: 0 0 0 2px rgba(44, 62, 80, 0.15) !important;
+    }
+
+    /* Send button styling - match system theme */
+    .n8n-chat-wrapper .chat-send-button,
+    .n8n-chat-wrapper [class*="send-button"],
+    .n8n-chat-wrapper button[type="submit"] {
+        background: #2c3e50 !important;
+        border-radius: 6px !important;
+        width: 38px !important;
+        height: 38px !important;
+        transition: background 0.15s ease !important;
+        border: none !important;
+    }
+
+    .n8n-chat-wrapper .chat-send-button:hover,
+    .n8n-chat-wrapper [class*="send-button"]:hover,
+    .n8n-chat-wrapper button[type="submit"]:hover {
+        background: #34495e !important;
+    }
+
+    /* Typing indicator */
+    .n8n-chat-wrapper .chat-typing-indicator {
+        color: #6b7280 !important;
+    }
+
+    /* Hide toggle button in embedded mode */
+    .n8n-chat-wrapper .chat-toggle {
+        display: none !important;
+    }
+
+    /* Hide the header completely */
+    .n8n-chat-wrapper .chat-header,
+    .n8n-chat-wrapper [class*="chat-header"] {
+        display: none !important;
+    }
+
+    /* Hide close button since we have modal close */
+    .n8n-chat-wrapper .chat-close-button {
+        display: none !important;
+    }
+</style>
 <script src="/js/dist/app/campaigns.min.js"></script>
 {{end}}

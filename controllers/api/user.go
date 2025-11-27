@@ -34,6 +34,7 @@ type userRequest struct {
 	Role                   string `json:"role"`
 	PasswordChangeRequired bool   `json:"password_change_required"`
 	AccountLocked          bool   `json:"account_locked"`
+	OAuthProvider          string `json:"oauth_provider"` // "microsoft", "google", etc. (empty for local users)
 }
 
 func (ur *userRequest) Validate(existingUser *models.User) error {
@@ -87,16 +88,31 @@ func (as *Server) Users(w http.ResponseWriter, r *http.Request) {
 			JSONResponse(w, models.Response{Success: false, Message: err.Error()}, http.StatusBadRequest)
 			return
 		}
-		err = auth.CheckPasswordPolicy(ur.Password)
-		if err != nil {
-			JSONResponse(w, models.Response{Success: false, Message: err.Error()}, http.StatusBadRequest)
-			return
+
+		// For OAuth users, password is not required
+		// For local users, password must meet policy requirements
+		var hash string
+		if ur.OAuthProvider == "" {
+			// Local user - password required
+			if ur.Password == "" {
+				JSONResponse(w, models.Response{Success: false, Message: "Password is required for local users"}, http.StatusBadRequest)
+				return
+			}
+			err = auth.CheckPasswordPolicy(ur.Password)
+			if err != nil {
+				JSONResponse(w, models.Response{Success: false, Message: err.Error()}, http.StatusBadRequest)
+				return
+			}
+			hash, err = auth.GeneratePasswordHash(ur.Password)
+			if err != nil {
+				JSONResponse(w, models.Response{Success: false, Message: err.Error()}, http.StatusInternalServerError)
+				return
+			}
+		} else {
+			// OAuth user - no password needed, will authenticate via OAuth provider
+			hash = ""
 		}
-		hash, err := auth.GeneratePasswordHash(ur.Password)
-		if err != nil {
-			JSONResponse(w, models.Response{Success: false, Message: err.Error()}, http.StatusInternalServerError)
-			return
-		}
+
 		role, err := models.GetRoleBySlug(ur.Role)
 		if err != nil {
 			JSONResponse(w, models.Response{Success: false, Message: err.Error()}, http.StatusInternalServerError)
@@ -110,6 +126,8 @@ func (as *Server) Users(w http.ResponseWriter, r *http.Request) {
 			RoleID:                 role.ID,
 			PasswordChangeRequired: ur.PasswordChangeRequired,
 			AccountLocked:          ur.AccountLocked,
+			OAuthProvider:          ur.OAuthProvider,
+			OAuthID:                "", // Will be set on first OAuth login
 		}
 		err = models.PutUser(&user)
 		if err != nil {

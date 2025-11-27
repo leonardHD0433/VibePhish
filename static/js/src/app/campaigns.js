@@ -501,9 +501,11 @@ function setupOptions() {
             });
 
             // Always initialize Select2 to prevent large multi-select box
+            // Use dropdownParent: $('body') to prevent dropdown from being clipped by modal overflow
             $("#users.form-control").select2({
                 placeholder: "Select Groups",
                 data: group_s2,
+                dropdownParent: $('body')
             });
 
             if (groups.length == 0) {
@@ -673,9 +675,13 @@ function switchCampaignMode(mode) {
         }
     } else {
         $('#manual-form-interface').fadeOut(300, function() {
-            $('#ai-chat-interface').fadeIn(300);
+            $('#ai-chat-interface').fadeIn(300, function() {
+                // Initialize n8n chat widget after interface is visible
+                if (typeof window.initN8nChat === 'function') {
+                    window.initN8nChat(mode);
+                }
+            });
         });
-        resetChatInterface();
     }
 
     // Remove morphing class after animation completes (500ms)
@@ -730,11 +736,8 @@ function sendChatMessage() {
     // Show typing indicator
     showTypingIndicator();
 
-    // Simulate AI response (TODO: Replace with actual LLM API call)
-    setTimeout(function() {
-        hideTypingIndicator();
-        processAIResponse(message);
-    }, 1500);
+    // Start autopilot agent workflow
+    startAutopilotWorkflow(message);
 }
 
 // Send a quick reply (suggestion button click)
@@ -798,68 +801,246 @@ function scrollChatToBottom() {
     chatMessages.scrollTop(chatMessages[0].scrollHeight);
 }
 
-// Process AI response (Placeholder - will integrate with LLM)
-function processAIResponse(userMessage) {
-    var response = "I understand you want to create a campaign. Let me help you with that. ";
+// ===================================================================
+// Autopilot Agent Workflow Functions
+// ===================================================================
 
-    if (userMessage.toLowerCase().includes('credential')) {
-        response += "For credential harvesting, I recommend:\n\n";
-        response += "1. A realistic login page template\n";
-        response += "2. Targeting employees with access to sensitive systems\n";
-        response += "3. Using a scenario like password expiration\n\n";
-        response += "Would you like me to create this campaign for you?";
+// Global state for autopilot workflow
+var autopilotState = {
+    userPrompt: '',
+    emailType: null,
+    emailTypeName: '',
+    groupId: null,
+    groupName: '',
+    targetCount: 0,
+    templateId: null,
+    templateName: '',
+    pageId: null,
+    pageName: '',
+    aiGenerated: false
+};
 
-        var aiMessageHTML = `
-            <div class="chat-message ai-message">
-                <div class="message-avatar">
-                    <i class="fa fa-robot"></i>
-                </div>
-                <div class="message-content">
-                    <p>${response}</p>
-                    <div class="quick-suggestions">
-                        <button class="suggestion-btn" onclick="generateCampaign('credential_harvesting')">
-                            <i class="fa fa-check"></i> Yes, create it
-                        </button>
-                        <button class="suggestion-btn" onclick="sendQuickReply('I need different options')">
-                            <i class="fa fa-times"></i> Show alternatives
-                        </button>
-                    </div>
-                </div>
+// Start the progressive autopilot workflow
+function startAutopilotWorkflow(userPrompt) {
+    // Reset state
+    autopilotState = {
+        userPrompt: userPrompt,
+        emailType: null,
+        emailTypeName: '',
+        groupId: null,
+        groupName: '',
+        targetCount: 0,
+        templateId: null,
+        templateName: '',
+        pageId: null,
+        pageName: '',
+        aiGenerated: false
+    };
+
+    // Step 1: Call AI Workflow 1 (Email Type Matching)
+    callAutopilotAgent1(userPrompt);
+}
+
+// AI Workflow 1: Email Type Matching
+function callAutopilotAgent1(userPrompt) {
+    appendAIMessage('<i class="fa fa-cog fa-spin"></i> Analyzing email type from your request...');
+
+    $.ajax({
+        url: '/api/campaigns/ai-workflow/1',
+        method: 'POST',
+        data: JSON.stringify({
+            user_prompt: userPrompt
+        }),
+        contentType: 'application/json',
+        dataType: 'json',
+        beforeSend: function(xhr) {
+            xhr.setRequestHeader('Authorization', 'Bearer ' + user.api_key);
+        }
+    })
+    .done(function(data) {
+        hideTypingIndicator();
+
+        if (data.success) {
+            autopilotState.emailType = data.matched_type;
+            autopilotState.emailTypeName = data.email_type_name;
+
+            var message = '✓ Email Type Identified: <strong>' + escapeHtml(data.email_type_name) + '</strong><br>';
+            message += '<small class="text-muted">Confidence: ' + data.confidence + '%</small><br>';
+            message += '<small class="text-muted">' + escapeHtml(data.reasoning) + '</small>';
+
+            appendAIMessage(message);
+            showTypingIndicator();
+
+            // Step 2: Call AI Workflow 2 (Target Filtering)
+            setTimeout(function() {
+                callAutopilotAgent2(userPrompt);
+            }, 500);
+        } else {
+            appendAIMessage('<span class="text-danger">✗ Failed to identify email type: ' + escapeHtml(data.error) + '</span>');
+        }
+    })
+    .fail(function(xhr, status, error) {
+        hideTypingIndicator();
+        var errorMsg = xhr.responseJSON && xhr.responseJSON.error ? xhr.responseJSON.error : error;
+        appendAIMessage('<span class="text-danger">✗ Error calling AI Workflow 1: ' + escapeHtml(errorMsg) + '</span>');
+    });
+}
+
+// AI Workflow 2: Target Filtering & Group Creation
+function callAutopilotAgent2(userPrompt) {
+    appendAIMessage('<i class="fa fa-cog fa-spin"></i> Filtering targets and creating group...');
+
+    $.ajax({
+        url: '/api/campaigns/ai-workflow/2',
+        method: 'POST',
+        data: JSON.stringify({
+            user_prompt: userPrompt
+        }),
+        contentType: 'application/json',
+        dataType: 'json',
+        beforeSend: function(xhr) {
+            xhr.setRequestHeader('Authorization', 'Bearer ' + user.api_key);
+        }
+    })
+    .done(function(data) {
+        hideTypingIndicator();
+
+        if (data.success) {
+            autopilotState.groupId = data.group_id;
+            autopilotState.groupName = data.group_name;
+            autopilotState.targetCount = data.target_count;
+
+            var message = '✓ Target Group Created: <strong>' + escapeHtml(data.group_name) + '</strong><br>';
+            message += '<small class="text-muted">Targets: ' + data.target_count + ' recipients</small><br>';
+            message += '<small class="text-muted">' + escapeHtml(data.filter_description) + '</small>';
+
+            appendAIMessage(message);
+            showTypingIndicator();
+
+            // Step 3: Call AI Workflow 3 (Template & Landing Page)
+            setTimeout(function() {
+                callAutopilotAgent3(userPrompt, autopilotState.emailType);
+            }, 500);
+        } else {
+            appendAIMessage('<span class="text-danger">✗ Failed to create target group: ' + escapeHtml(data.error) + '</span>');
+        }
+    })
+    .fail(function(xhr, status, error) {
+        hideTypingIndicator();
+        var errorMsg = xhr.responseJSON && xhr.responseJSON.error ? xhr.responseJSON.error : error;
+        appendAIMessage('<span class="text-danger">✗ Error calling AI Workflow 2: ' + escapeHtml(errorMsg) + '</span>');
+    });
+}
+
+// AI Workflow 3: Template & Landing Page Generation
+function callAutopilotAgent3(userPrompt, emailType) {
+    appendAIMessage('<i class="fa fa-cog fa-spin"></i> Preparing email template and landing page...');
+
+    $.ajax({
+        url: '/api/campaigns/ai-workflow/3',
+        method: 'POST',
+        data: JSON.stringify({
+            user_prompt: userPrompt,
+            theme_description: userPrompt,
+            email_type: emailType
+        }),
+        contentType: 'application/json',
+        dataType: 'json',
+        beforeSend: function(xhr) {
+            xhr.setRequestHeader('Authorization', 'Bearer ' + user.api_key);
+        }
+    })
+    .done(function(data) {
+        hideTypingIndicator();
+
+        if (data.success) {
+            autopilotState.templateId = data.template_id;
+            autopilotState.templateName = data.template_name;
+            autopilotState.pageId = data.page_id;
+            autopilotState.pageName = data.page_name;
+            autopilotState.aiGenerated = data.ai_generated;
+
+            var message = '✓ Template & Landing Page Ready<br>';
+            message += '<small class="text-muted">Template: ' + escapeHtml(data.template_name) + '</small><br>';
+            message += '<small class="text-muted">Landing Page: ' + escapeHtml(data.page_name) + '</small>';
+
+            if (data.ai_generated && data.warning) {
+                message += '<br><span class="text-warning"><i class="fa fa-exclamation-triangle"></i> ' + escapeHtml(data.warning) + '</span>';
+            }
+
+            appendAIMessage(message);
+
+            // Step 4: Show campaign preview
+            setTimeout(function() {
+                showAutopilotCampaignPreview();
+            }, 500);
+        } else {
+            appendAIMessage('<span class="text-danger">✗ Failed to generate template/page: ' + escapeHtml(data.error) + '</span>');
+        }
+    })
+    .fail(function(xhr, status, error) {
+        hideTypingIndicator();
+        var errorMsg = xhr.responseJSON && xhr.responseJSON.error ? xhr.responseJSON.error : error;
+        appendAIMessage('<span class="text-danger">✗ Error calling AI Workflow 3: ' + escapeHtml(errorMsg) + '</span>');
+    });
+}
+
+// Helper function to append AI message (supports HTML content)
+function appendAIMessage(htmlContent) {
+    var messageHTML = `
+        <div class="chat-message ai-message">
+            <div class="message-avatar">
+                <i class="fa fa-robot"></i>
             </div>
-        `;
-        $('#chatMessages').append(aiMessageHTML);
-    } else {
-        response += "Could you provide more details about:\n• Target audience\n• Campaign objectives\n• Preferred scenario";
-        addChatMessage('ai', response);
-    }
+            <div class="message-content">
+                <p>${htmlContent}</p>
+            </div>
+        </div>
+    `;
 
+    $('#chatMessages').append(messageHTML);
     scrollChatToBottom();
 }
 
-// Generate campaign based on AI suggestions (Placeholder)
-function generateCampaign(campaignType) {
-    addChatMessage('user', 'Yes, create it');
-    showTypingIndicator();
+// Show final campaign preview with all gathered data
+function showAutopilotCampaignPreview() {
+    var campaignName = 'AI Campaign - ' + moment().format('YYYY-MM-DD HH:mm');
+    var launchDate = moment().add(5, 'minutes').format('MMMM Do YYYY, h:mm a');
 
-    setTimeout(function() {
-        hideTypingIndicator();
+    // Populate manual form silently in background
+    $('#name').val(campaignName);
+    $('#template').val(autopilotState.templateId.toString()).trigger('change.select2');
+    $('#page').val(autopilotState.pageId.toString()).trigger('change.select2');
+    $('#profile').val(autopilotState.emailType).trigger('change.select2');
+    $('#users').val([autopilotState.groupId.toString()]).trigger('change.select2');
+    $('#launch_date').val(launchDate);
 
-        // Populate form fields with AI-generated data
-        $('#name').val('Credential Harvesting - ' + moment().format('YYYY-MM-DD'));
+    // Show preview panel
+    var previewHTML = `
+        <div class="row">
+            <div class="col-md-6">
+                <p><strong>Campaign Name:</strong><br>${escapeHtml(campaignName)}</p>
+                <p><strong>Email Type:</strong><br>${escapeHtml(autopilotState.emailTypeName)}</p>
+                <p><strong>Email Template:</strong><br>${escapeHtml(autopilotState.templateName)}${autopilotState.aiGenerated ? ' <span class="label label-info">AI Generated</span>' : ''}</p>
+            </div>
+            <div class="col-md-6">
+                <p><strong>Landing Page:</strong><br>${escapeHtml(autopilotState.pageName)}${autopilotState.aiGenerated ? ' <span class="label label-info">AI Generated</span>' : ''}</p>
+                <p><strong>Target Group:</strong><br>${escapeHtml(autopilotState.groupName)} (${autopilotState.targetCount} recipients)</p>
+                <p><strong>Launch Date:</strong><br>${escapeHtml(launchDate)}</p>
+            </div>
+        </div>
+    `;
 
-        // Show preview
-        showCampaignPreview({
-            name: 'Credential Harvesting - ' + moment().format('YYYY-MM-DD'),
-            type: 'Credential Harvesting',
-            template: 'Password Expiration Notice',
-            landingPage: 'Office365 Login',
-            targetGroups: 'Sales Department',
-            launchDate: moment().add(1, 'day').format('MMMM Do YYYY, h:mm a')
-        });
+    $('#previewContent').html(previewHTML);
+    $('#campaignPreview').slideDown();
 
-        addChatMessage('ai', 'Great! I\'ve created a campaign preview for you. Review the details and click "Launch Campaign" when ready.');
-    }, 2000);
+    // Add final AI message
+    appendAIMessage('🎯 <strong>Campaign Ready!</strong> Review the details above and click "Launch Campaign" when ready, or "Edit Details" to make changes.');
 }
+
+// ===================================================================
+// End Autopilot Agent Workflow Functions
+// ===================================================================
 
 // Show campaign preview
 function showCampaignPreview(campaignData) {
@@ -971,6 +1152,16 @@ $(document).ready(function () {
     });
     $('#modal').on('hidden.bs.modal', function (event) {
         dismiss()
+    });
+
+    // Initialize n8n chat when modal is shown (for copilot/auto modes)
+    $('#modal').on('shown.bs.modal', function () {
+        if (currentCampaignMode !== 'manual' && typeof window.initN8nChat === 'function') {
+            // Small delay to ensure container is ready
+            setTimeout(function() {
+                window.initN8nChat(currentCampaignMode);
+            }, 100);
+        }
     });
     api.campaigns.summary()
         .success(function (data) {

@@ -2,17 +2,32 @@ let users = []
 
 // Save attempts to POST or PUT to /users/
 const save = (id) => {
-    // Validate that the passwords match
-    if ($("#password").val() !== $("#confirm_password").val()) {
-        modalError("Passwords must match.")
-        return
+    const isOAuthUser = $("#auth_type_oauth").prop('checked');
+
+    // For local users, validate passwords match
+    if (!isOAuthUser) {
+        if ($("#password").val() !== $("#confirm_password").val()) {
+            modalError("Passwords must match.")
+            return
+        }
+        if ($("#password").val() === "") {
+            modalError("Password is required for local users.")
+            return
+        }
     }
+
+    // For OAuth users, default to Microsoft if not selected
+    if (isOAuthUser && $("#oauth_provider").val() === "") {
+        $("#oauth_provider").val("microsoft");
+    }
+
     let user = {
         username: $("#username").val(),
-        password: $("#password").val(),
+        password: isOAuthUser ? "" : $("#password").val(),
         role: $("#role").val(),
-        password_change_required: $("#force_password_change_checkbox").prop('checked'),
-        account_locked: $("#account_locked_checkbox").prop('checked')
+        password_change_required: isOAuthUser ? false : $("#force_password_change_checkbox").prop('checked'),
+        account_locked: $("#account_locked_checkbox").prop('checked'),
+        oauth_provider: isOAuthUser ? $("#oauth_provider").val() : ""
     }
     // Submit the user
     if (id != -1) {
@@ -50,6 +65,10 @@ const dismiss = () => {
     $("#password").val("")
     $("#confirm_password").val("")
     $("#role").val("")
+    $("#oauth_provider").val("microsoft") // Default to Microsoft
+    $("#auth_type_local").prop('checked', true)
+    $("#password_section").show()
+    $("#oauth_provider_section").hide()
     $("#force_password_change_checkbox").prop('checked', true)
     $("#account_locked_checkbox").prop('checked', false)
     $("#modal\\.flashes").empty()
@@ -232,6 +251,19 @@ const load = () => {
 
 $(document).ready(function () {
     load()
+
+    // Setup auth type toggle
+    $('input[name="auth_type"]').on('change', function() {
+        const isOAuth = $("#auth_type_oauth").prop('checked');
+        if (isOAuth) {
+            $("#password_section").hide();
+            $("#oauth_provider_section").show();
+        } else {
+            $("#password_section").show();
+            $("#oauth_provider_section").hide();
+        }
+    });
+
     // Setup the event listeners
     $("#modal").on("hide.bs.modal", function () {
         dismiss();

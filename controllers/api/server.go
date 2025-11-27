@@ -112,6 +112,11 @@ func (as *Server) registerRoutes() {
 	router.HandleFunc("/email_types/all", mid.Use(as.EmailTypesAll, mid.RequirePermission(models.PermissionModifySystem)))
 	router.HandleFunc("/email_types/{id:[0-9]+}", mid.Use(as.EmailType, mid.RequirePermission(models.PermissionModifySystem)))
 
+	// AI Workflow routes (used by both Copilot and Auto modes)
+	router.HandleFunc("/campaigns/ai-workflow/1", as.AutopilotAgent1)
+	router.HandleFunc("/campaigns/ai-workflow/2", as.AutopilotAgent2)
+	router.HandleFunc("/campaigns/ai-workflow/3", as.AutopilotAgent3)
+
 	// Use root router as handler to include both root routes (n8n callback) and subrouter routes (API endpoints)
 	as.handler = root
 }

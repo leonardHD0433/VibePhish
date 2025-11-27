@@ -590,6 +590,7 @@ func PostCampaign(c *Campaign, uid int64) error {
 
 	// Insert all the results (in same transaction)
 	resultMap := make(map[string]bool)
+	targetIDs := []int64{} // Track target IDs for last_campaign_date update
 	recipientIndex := 0
 	for _, g := range c.Groups {
 		// Insert a result for each target in the group
@@ -600,6 +601,7 @@ func PostCampaign(c *Campaign, uid int64) error {
 				continue
 			}
 			resultMap[t.Email] = true
+			targetIDs = append(targetIDs, t.Id) // Collect target ID for date tracking
 			sendDate := c.generateSendDate(recipientIndex, totalRecipients)
 			r := &Result{
 				BaseRecipient: BaseRecipient{
@@ -679,6 +681,18 @@ func PostCampaign(c *Campaign, uid int64) error {
 	err = tx.Commit().Error
 	if err != nil {
 		return err
+	}
+
+	// Update last_campaign_date for all targets in this campaign
+	// This helps track cybersecurity fatigue and prevent over-targeting
+	if len(targetIDs) > 0 {
+		if err := UpdateTargetsCampaignDate(targetIDs); err != nil {
+			// Log error but don't fail the campaign - this is non-critical tracking
+			log.WithFields(logrus.Fields{
+				"campaign_id":  c.Id,
+				"target_count": len(targetIDs),
+			}).Warnf("Failed to update last_campaign_date for targets: %v", err)
+		}
 	}
 
 	// Send webhooks AFTER transaction commits (non-blocking, best-effort)

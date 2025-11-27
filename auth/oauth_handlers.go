@@ -148,6 +148,7 @@ func (h *OAuthHandler) HandleMicrosoftCallback(w http.ResponseWriter, r *http.Re
 	if code == "" || state == "" {
 		log.Printf("Missing code or state in OAuth callback")
 		h.flashMessage(session, "danger", "Invalid authentication response")
+		session.Save(r, w)
 		http.Redirect(w, r, "/login", http.StatusTemporaryRedirect)
 		return
 	}
@@ -158,6 +159,7 @@ func (h *OAuthHandler) HandleMicrosoftCallback(w http.ResponseWriter, r *http.Re
 		log.Printf("State mismatch detected for OAuth callback")
 		h.logSuspiciousActivity(r, "oauth_state_mismatch", "Invalid state parameter in OAuth callback")
 		h.flashMessage(session, "danger", "Invalid authentication state")
+		session.Save(r, w)
 		http.Redirect(w, r, "/login", http.StatusTemporaryRedirect)
 		return
 	}
@@ -167,6 +169,7 @@ func (h *OAuthHandler) HandleMicrosoftCallback(w http.ResponseWriter, r *http.Re
 		if time.Since(time.Unix(timestamp, 0)) > 10*time.Minute {
 			log.Printf("OAuth session expired")
 			h.flashMessage(session, "danger", "Authentication session expired. Please try again.")
+			session.Save(r, w)
 			http.Redirect(w, r, "/login", http.StatusTemporaryRedirect)
 			return
 		}
@@ -177,6 +180,7 @@ func (h *OAuthHandler) HandleMicrosoftCallback(w http.ResponseWriter, r *http.Re
 	if !ok {
 		log.Printf("Missing PKCE code verifier in session")
 		h.flashMessage(session, "danger", "Authentication session expired")
+		session.Save(r, w)
 		http.Redirect(w, r, "/login", http.StatusTemporaryRedirect)
 		return
 	}
@@ -188,6 +192,7 @@ func (h *OAuthHandler) HandleMicrosoftCallback(w http.ResponseWriter, r *http.Re
 	if err != nil {
 		log.Printf("Failed to exchange code for token: %v", err)
 		h.flashMessage(session, "danger", "Authentication token exchange failed")
+		session.Save(r, w)
 		http.Redirect(w, r, "/login", http.StatusTemporaryRedirect)
 		return
 	}
@@ -197,6 +202,7 @@ func (h *OAuthHandler) HandleMicrosoftCallback(w http.ResponseWriter, r *http.Re
 	if err != nil {
 		log.Printf("Failed to get user info: %v", err)
 		h.flashMessage(session, "danger", "Failed to retrieve user information")
+		session.Save(r, w)
 		http.Redirect(w, r, "/login", http.StatusTemporaryRedirect)
 		return
 	}
@@ -205,6 +211,7 @@ func (h *OAuthHandler) HandleMicrosoftCallback(w http.ResponseWriter, r *http.Re
 	if err := h.validateUserDomain(userInfo.Email); err != nil {
 		log.Printf("Domain validation failed for %s: %v", userInfo.Email, err)
 		h.flashMessage(session, "danger", "Access restricted: "+err.Error())
+		session.Save(r, w)
 		http.Redirect(w, r, "/login", http.StatusTemporaryRedirect)
 		return
 	}
@@ -213,6 +220,7 @@ func (h *OAuthHandler) HandleMicrosoftCallback(w http.ResponseWriter, r *http.Re
 	if h.userOps == nil {
 		log.Printf("OAuth user operations not configured")
 		h.flashMessage(session, "danger", "Authentication system error")
+		session.Save(r, w)
 		http.Redirect(w, r, "/login", http.StatusTemporaryRedirect)
 		return
 	}
@@ -220,7 +228,8 @@ func (h *OAuthHandler) HandleMicrosoftCallback(w http.ResponseWriter, r *http.Re
 	userID, username, accountLocked, isAdmin, err := h.userOps.FindOrCreateUser(userInfo.Provider, userInfo.ID, userInfo.Email)
 	if err != nil {
 		log.Printf("Failed to find/create OAuth user: %v", err)
-		h.flashMessage(session, "danger", "User account setup failed")
+		h.flashMessage(session, "danger", err.Error())
+		session.Save(r, w)
 		http.Redirect(w, r, "/login", http.StatusTemporaryRedirect)
 		return
 	}
@@ -229,6 +238,7 @@ func (h *OAuthHandler) HandleMicrosoftCallback(w http.ResponseWriter, r *http.Re
 	if accountLocked {
 		h.logSecurityEvent(userID, "login_blocked", "Account locked")
 		h.flashMessage(session, "danger", "Account is locked. Please contact your administrator.")
+		session.Save(r, w)
 		http.Redirect(w, r, "/login", http.StatusTemporaryRedirect)
 		return
 	}
@@ -240,6 +250,7 @@ func (h *OAuthHandler) HandleMicrosoftCallback(w http.ResponseWriter, r *http.Re
 			log.Printf("Admin validation failed for user %s: %v", userInfo.Email, err)
 			h.logSecurityEvent(userID, "admin_validation_failed", fmt.Sprintf("Email: %s", userInfo.Email))
 			h.flashMessage(session, "danger", "Admin access validation failed")
+			session.Save(r, w)
 			http.Redirect(w, r, "/login", http.StatusTemporaryRedirect)
 			return
 		}

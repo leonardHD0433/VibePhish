@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	ctx "github.com/gophish/gophish/context"
@@ -137,11 +138,45 @@ func (as *Server) CampaignComplete(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// FlexibleTime is a time.Time wrapper that handles both RFC3339 and ISO 8601 without timezone
+type FlexibleTime struct {
+	time.Time
+}
+
+// UnmarshalJSON parses time strings with or without timezone info
+// If timezone is missing, defaults to Asia/Singapore (UTC+8)
+func (ft *FlexibleTime) UnmarshalJSON(b []byte) error {
+	s := strings.Trim(string(b), `"`)
+
+	// Try RFC3339 first (with timezone: 2006-01-02T15:04:05Z07:00)
+	t, err := time.Parse(time.RFC3339, s)
+	if err == nil {
+		ft.Time = t
+		return nil
+	}
+
+	// Try ISO 8601 without timezone (2006-01-02T15:04:05)
+	t, err = time.Parse("2006-01-02T15:04:05", s)
+	if err == nil {
+		// Default to Asia/Singapore timezone (UTC+8)
+		location, locErr := time.LoadLocation("Asia/Singapore")
+		if locErr != nil {
+			// Fallback to fixed offset if timezone database not available
+			location = time.FixedZone("UTC+8", 8*60*60)
+		}
+		ft.Time = time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), location)
+		log.Infof("Parsed date without timezone '%s', defaulting to %s", s, location)
+		return nil
+	}
+
+	return err
+}
+
 // ValidateCampaignRateLimitRequest represents the request payload for rate limit validation
 type ValidateCampaignRateLimitRequest struct {
-	LaunchDate time.Time `json:"launch_date"`
-	SendByDate time.Time `json:"send_by_date"`
-	GroupIDs   []int64   `json:"group_ids"`
+	LaunchDate FlexibleTime `json:"launch_date"`
+	SendByDate FlexibleTime `json:"send_by_date"`
+	GroupIDs   []int64      `json:"group_ids"`
 }
 
 // ValidateCampaignRateLimitResponse represents the response for rate limit validation
@@ -203,7 +238,7 @@ func (as *Server) ValidateCampaignRateLimit(w http.ResponseWriter, r *http.Reque
 	}
 
 	// Validate rate limit
-	warning := models.ValidateCampaignRateLimit(req.LaunchDate, req.SendByDate, totalRecipients)
+	warning := models.ValidateCampaignRateLimit(req.LaunchDate.Time, req.SendByDate.Time, totalRecipients)
 
 	if warning != nil {
 		// Rate limit is too aggressive - return warning
