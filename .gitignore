@@ -44,5 +44,6 @@ ssl/
 # n8n exports (contains sensitive credentials)
 n8n-exports/
 *.crt
+!ca-certificate.crt
 *.csv
 test-droplet

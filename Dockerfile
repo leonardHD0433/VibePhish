@@ -35,6 +35,7 @@ COPY --from=build-golang /app/db/ ./db/
 COPY --from=build-golang /app/docker/fyphish/run.sh ./
 COPY --from=build-golang /app/VERSION ./
 COPY config.json ./
+COPY ca-certificate.crt ./
 
 RUN chown -R app:app . && chmod +x run.sh
 
