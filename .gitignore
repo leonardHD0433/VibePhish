@@ -35,6 +35,8 @@ gophish
 !.env.example
 *.secret
 config-test.json
+.mcp.json
+credentials.json
 .iteration
 .summary
 .issues
@@ -47,3 +49,4 @@ n8n-exports/
 !ca-certificate.crt
 *.csv
 test-droplet
+UML/
